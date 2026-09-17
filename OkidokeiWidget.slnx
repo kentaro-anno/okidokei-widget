@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OkidokeiWidget.App/OkidokeiWidget.App.csproj" />
+    <Project Path="src/OkidokeiWidget.Core/OkidokeiWidget.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OkidokeiWidget.Core.Tests/OkidokeiWidget.Core.Tests.csproj" />
+  </Folder>
+</Solution>

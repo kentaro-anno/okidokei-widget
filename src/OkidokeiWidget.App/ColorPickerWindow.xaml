@@ -1,0 +1,44 @@
+<Window x:Class="OkidokeiWidget.App.ColorPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="色を選択"
+        Icon="app.ico"
+        Width="300"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        FontSize="13">
+    <StackPanel Margin="16">
+        <TextBlock Text="よく使う色" Margin="0,0,0,6" />
+        <ItemsControl x:Name="PaletteItemsControl">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <UniformGrid Columns="8" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Button Width="28" Height="28" Margin="2" Click="PaletteButton_Click" Tag="{Binding Hex}"
+                            Background="{Binding Brush}" BorderBrush="#FF808080" BorderThickness="1" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock Text="カラーコード (#RRGGBB)" Margin="0,14,0,4" />
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="HexTextBox" Grid.Column="0" VerticalContentAlignment="Center"
+                     TextChanged="HexTextBox_TextChanged" Margin="0,0,8,0" />
+            <Border x:Name="PreviewSwatch" Grid.Column="1" Width="28" Height="28"
+                    BorderBrush="#FF808080" BorderThickness="1" />
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+            <Button Content="キャンセル" Click="CancelButton_Click" Margin="0,0,8,0" Padding="12,4" />
+            <Button Content="OK" Click="OkButton_Click" Padding="12,4" IsDefault="True" />
+        </StackPanel>
+    </StackPanel>
+</Window>

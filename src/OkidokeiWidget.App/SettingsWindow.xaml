@@ -1,0 +1,147 @@
+<Window x:Class="OkidokeiWidget.App.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OkidokeiWidget 詳細設定"
+        Icon="app.ico"
+        Width="560"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        FontSize="13">
+    <Window.Resources>
+        <Style TargetType="GroupBox" BasedOn="{StaticResource {x:Type GroupBox}}">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="FontWeight" Value="Normal" />
+        </Style>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+        <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+            <Setter Property="Margin" Value="0,3" />
+        </Style>
+        <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+        <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+        <!--
+            Fluent テーマの TabItem は、未選択時のみ Background プロパティ(TemplateBinding)を
+            使い、選択時はテンプレートトリガーで TabViewItemHeaderBackgroundSelected を直接
+            参照する。この違いを利用して「選択中タブ = 設定パネルと同じ背景(透過)」
+            「未選択タブ = 一段暗い背景」とし、選択中タブがパネルと地続きに見えるようにする。
+            文字色はライト/ダークで反転する必要があるため指定せず、テーマ側に任せる
+            (Foreground は継承プロパティなので、指定するとタブの中身である右パネルの
+            ラベルにも波及してしまう)
+        -->
+        <Style TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}">
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="MinWidth" Value="120" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <!-- Fluent テーマの SmokeFillColorDefault と同値。ライト/ダークとも同じ値が
+                 使われている黒の重ね色なので、どちらのテーマでも一段暗く見える -->
+            <Setter Property="Background" Value="#4D000000" />
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="FontWeight" Value="Bold" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <!--
+            選択中タブの背景は透明にして、下地(設定パネルと同じ背景)をそのまま見せる。
+            枠線 (TabViewSelectedItemBorderBrush) は左/上/下のみに付き右側が開いた形状のため、
+            選択中タブが右のパネルへつながって見える。枠線の色は Fluent テーマの
+            SurfaceStrokeColorDefault と同値で、ライト/ダークとも同じ中間色のため
+            どちらのテーマでも視認できる
+            (キー名は https://github.com/dotnet/wpf/issues/10356 と Fluent テーマの
+            Styles/TabControl.xaml・Resources/Theme/{Light,Dark}.xaml で確認)。
+        -->
+        <SolidColorBrush x:Key="TabViewItemHeaderBackgroundSelected" Color="Transparent" />
+        <SolidColorBrush x:Key="TabViewSelectedItemBorderBrush" Color="#66757575" />
+    </Window.Resources>
+    <TabControl Margin="12" TabStripPlacement="Left">
+        <TabItem Header="表示">
+            <StackPanel Margin="12">
+                <GroupBox>
+                    <StackPanel>
+                        <CheckBox x:Name="ShowDateCheckBox" Content="日付を表示する"
+                                  Checked="ShowDateCheckBox_Changed" Unchecked="ShowDateCheckBox_Changed" />
+                        <CheckBox x:Name="ShowDayOfWeekCheckBox" Content="曜日を表示する"
+                                  Checked="ShowDayOfWeekCheckBox_Changed" Unchecked="ShowDayOfWeekCheckBox_Changed" />
+                        <CheckBox x:Name="ShowSecondsCheckBox" Content="秒を表示する"
+                                  Checked="ShowSecondsCheckBox_Changed" Unchecked="ShowSecondsCheckBox_Changed" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox>
+                    <StackPanel>
+                        <TextBlock Text="日付の区切り文字" />
+                        <ComboBox x:Name="DateSeparatorCombo" SelectionChanged="DateSeparatorCombo_SelectionChanged" />
+
+                        <TextBlock Text="曜日の表示形式" />
+                        <ComboBox x:Name="DayOfWeekFormatCombo" DisplayMemberPath="Label"
+                                  SelectionChanged="DayOfWeekFormatCombo_SelectionChanged" Margin="0" />
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </TabItem>
+
+        <TabItem Header="フォント">
+            <StackPanel Margin="12">
+                <TextBlock Text="フォントの種類 (時刻・日付・曜日で共通)" />
+                <ComboBox x:Name="FontFamilyCombo" SelectionChanged="FontFamilyCombo_SelectionChanged" />
+
+                <TextBlock Text="時刻のフォントサイズ" Margin="0,4,0,4" />
+                <Slider x:Name="TimeFontSizeSlider" Minimum="8" Maximum="96" TickFrequency="1" IsSnapToTickEnabled="True"
+                        ValueChanged="TimeFontSizeSlider_ValueChanged" />
+                <Button x:Name="TimeFontColorButton" Click="TimeFontColorButton_Click"
+                        HorizontalAlignment="Left" Padding="8,4" Margin="0,0,0,10" />
+
+                <TextBlock Text="日付・曜日のフォントサイズ" />
+                <Slider x:Name="DateFontSizeSlider" Minimum="8" Maximum="72" TickFrequency="1" IsSnapToTickEnabled="True"
+                        ValueChanged="DateFontSizeSlider_ValueChanged" />
+                <Button x:Name="DateFontColorButton" Click="DateFontColorButton_Click"
+                        HorizontalAlignment="Left" Padding="8,4" />
+            </StackPanel>
+        </TabItem>
+
+        <TabItem Header="レイアウト・背景">
+            <StackPanel Margin="12">
+                <GroupBox>
+                    <StackPanel>
+                        <TextBlock Text="日付/曜日の表示位置 (時刻に対して)" />
+                        <ComboBox x:Name="DateDayOfWeekPositionCombo" DisplayMemberPath="Label" Margin="0"
+                                  SelectionChanged="DateDayOfWeekPositionCombo_SelectionChanged" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox>
+                    <StackPanel>
+                        <Button x:Name="BackgroundColorButton" Click="BackgroundColorButton_Click"
+                                HorizontalAlignment="Left" Padding="8,4" Margin="0,0,0,10" />
+
+                        <TextBlock Text="背景透過度 (0=不透明 〜 100=透明)" />
+                        <Slider x:Name="OpacitySlider" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                                ValueChanged="OpacitySlider_ValueChanged" Margin="0" />
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </TabItem>
+
+        <TabItem Header="モニター・起動">
+            <StackPanel Margin="12">
+                <GroupBox>
+                    <StackPanel x:Name="MonitorsPanel" />
+                </GroupBox>
+
+                <GroupBox>
+                    <StackPanel>
+                        <CheckBox x:Name="AutoStartCheckBox" Content="Windows 起動時に自動的に起動する"
+                                  Checked="AutoStartCheckBox_Changed" Unchecked="AutoStartCheckBox_Changed" />
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </TabItem>
+    </TabControl>
+</Window>

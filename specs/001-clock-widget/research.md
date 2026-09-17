@@ -1,0 +1,214 @@
+# Phase 0 Research: 常駐デスクトップ時計ウィジェット
+
+**Feature**: `001-clock-widget` | **Date**: 2026-09-17
+
+技術選定のうち、仕様書 (`spec.md`) や要件定義 (`docs/requirements.md`) では明示されておらず、
+実装前に決めておく必要がある事項を整理する。
+
+## 1. .NET バージョン
+
+- **Decision**: .NET 10 (LTS) + C# 最新言語バージョン、`net10.0-windows` をターゲットとする
+- **Rationale**: 新規プロジェクトであり、本セッション時点(2026-09-17)で最新の LTS が .NET 10
+  (2025-11 リリース)であるため、サポート期間を最大化できる
+- **Alternatives considered**: .NET 8 (旧 LTS、2026-11 でサポート終了予定のため新規採用は不利)
+
+## 2. マルチモニタ列挙とモニタ識別
+
+- **Decision**: `System.Windows.Forms.Screen`(WPF アプリから WindowsDesktop SDK 経由で参照可能)
+  でモニタの列挙・作業領域取得を行う。ただし永続化する「モニタ識別子」には
+  `EnumDisplayDevices`(P/Invoke)で取得できる EDID 由来のデバイス ID を使う
+- **Rationale**: `Screen.DeviceName`(`\\.\DISPLAY1` 等)はケーブル挿し直しや接続順序の変化で
+  同じ物理モニタに対しても変わり得る。EDID 由来の ID は物理モニタに紐づき、再接続後も安定する
+  ため、Edge Case「モニタ取り外し時も設定を保持し、再接続時に復元する」(FR-014, FR-015, SC-005)
+  を満たすために必要
+- **Alternatives considered**: `Screen.DeviceName` をそのままキーにする案(実装は単純だが、
+  再接続順序によって設定が別モニタのものとして扱われ SC-005 を満たせないため却下)
+
+## 3. 自動起動の実装方式
+
+- **Decision**: スタートアップフォルダ(`shell:startup`)へのショートカット (`.lnk`) 作成/削除
+  で自動起動の ON/OFF を実装する。レジストリの Run キーは使用しない
+- **Rationale**: Constitution Core Principle III(設定はレジストリを使わない)の趣旨を自動起動の
+  実装方式にも一貫して適用する。ショートカットの作成/削除は ON/OFF 切替の実装として十分に単純
+- **Alternatives considered**: レジストリ Run キー(Constitution の Additional Constraints で
+  許容されてはいるが、レジストリ不使用の原則をアプリ全体で一貫させるため今回は不採用)
+
+## 4. アプリの識別名・設定ファイルの保存場所
+
+- **Decision**: アプリの識別名(≒設定フォルダ名)を `OkidokeiWidget` とし、設定ファイルは
+  `%APPDATA%\OkidokeiWidget\settings.json` に保存する。`Okidokei` は「置き時計」に由来する
+  造語
+- **Rationale**: `docs/requirements.md` に記載の想定 (`%APPDATA%` 配下) に従う。ユーザー単位で
+  書き込み権限が確実にあり、管理者権限を必要としない。`ClockWidget`・`DesktopClockWidget`
+  はいずれも一般的すぎて他アプリと衝突する可能性があるとの指摘を受け、日本語由来の造語による
+  独自性の高い名称に変更した
+- **Alternatives considered**:
+  - 実行ファイルと同じフォルダ(`Program Files` 配下等に配置されると書き込み権限が無い場合が
+    あるため不採用)
+  - `%APPDATA%\ClockWidget` のような単独フォルダ名(汎用的すぎて他アプリと衝突するリスクが
+    あるため不採用)
+  - `%APPDATA%\KentaroAnno\ClockWidget` のようなベンダー名フォルダを挟む案(Windows では一般的
+    な構成だが、開発者の実名がアプリ内部のパスに恒久的に埋め込まれてしまうため不採用)
+  - `%APPDATA%\DesktopClockWidget`(リポジトリ名由来だが、依然として説明的すぎて一般名詞に近く、
+    人間からより独自性のある名称が欲しいとの要望を受けて `OkidokeiWidget` に変更した)
+
+## 5. High DPI 対応
+
+- **Decision**: アプリマニフェストで Per-Monitor V2 DPI 認識を宣言する
+- **Rationale**: Constitution Core Principle V(マルチモニタ・DPI 対応)を満たすため。.NET の
+  WPF は Per-Monitor V2 宣言時、モニタ間移動時の DPI 変化に自動追随する
+- **Alternatives considered**: System DPI Aware(モニタ間で DPI が異なる構成でウィジェットの
+  文字サイズ・位置が崩れるため不採用)
+
+## 6. 二重起動防止
+
+- **Decision**: 名前付き Mutex による多重起動チェック。2 つ目のプロセスは何もせず終了する
+- **Rationale**: Edge Case「二重起動時は既存ウィジェットにフォーカス、または何もしない」に対し、
+  Assumptions で「詳細な排他制御の方式は実装時に妥当な標準的手法を選定してよい」とされており、
+  最小実装で要件を満たせる
+- **Alternatives considered**: 既存プロセスへフォーカスを移す IPC 実装(個人用ツールとしては
+  過剰なため、YAGNI により不採用。「何もしない」で仕様を満たす)
+
+## 7. テスト方針
+
+- **Decision**: 見た目に依存しないロジック(設定の読み書き・デフォルトへのフォールバック・
+  モニタ識別子のマッチング)は xUnit による単体テストで検証する。UI・視覚的な確認は
+  `quickstart.md` の手動シナリオで行い、UI 自動化フレームワークは導入しない
+- **Rationale**: Constitution Core Principle I(シンプルさ優先)に従い、個人用ツールに UI
+  自動化テストの導入コストを払わない。一方で FR-018(壊れた設定ファイルでもクラッシュしない)
+  等は自動テストで継続的に保証する価値があるため単体テストは行う
+- **Alternatives considered**: WPF UI 自動化(FlaUI 等)の導入(個人用ツールの規模に対して
+  過剰なため不採用)
+
+## 8. クイック切替 UI の実装形態
+
+- **Decision**: 常駐トレイアイコンを追加せず、ウィジェット本体への右クリックで表示する
+  `ContextMenu` として実装する
+- **Rationale**: `docs/requirements.md`・`spec.md` とも「右クリックメニュー」とのみ記載しており
+  トレイアイコンは要求されていない。トレイアイコン実装には追加ライブラリ
+  (`Hardcodet.NotifyIcon.Wpf` 等)が必要になり、Core Principle I(YAGNI)に反する
+- **Alternatives considered**: システムトレイアイコン + メニュー(要求されていない機能であり
+  依存関係も増えるため不採用)
+
+## 9. 最前面表示の限界
+
+- **Decision**: WPF 標準の `Topmost` プロパティで実装する。DirectX 排他フルスクリーンモードの
+  ゲーム等、OS レベルで最前面表示を上書きするアプリケーションについては対応範囲外の既知の制約
+  として扱う
+- **Rationale**: Edge Case で言及されている「フルスクリーンアプリ上でも表示され続ける」ことへの
+  期待は、ウィンドウモード/ボーダレスウィンドウのアプリに対しては `Topmost` で満たせる。
+  排他フルスクリーンは OS の描画パイプラインを専有するため、追加のフック等での回避は個人用
+  ツールの範囲を超える(YAGNI)
+- **Alternatives considered**: 定期的に `Topmost` を再設定し続けるポーリング(効果が限定的な
+  上、Core Principle II の軽量常駐に反するため不採用)
+
+## 10. サードパーティ (OSS) ライブラリのライセンス確認方針
+
+- **Decision**: 本体 (`OkidokeiWidget.Core` / `OkidokeiWidget.App`) が選定した依存関係は
+  BCL・WPF・`System.Windows.Forms`(いずれも .NET SDK/ランタイムに含まれ、追加の NuGet
+  パッケージ取得を要しない)のみである。一方、テストプロジェクト
+  (`OkidokeiWidget.Core.Tests`) は xUnit 関連パッケージ (`xunit`, `xunit.runner.visualstudio`,
+  `Microsoft.NET.Test.Sdk`) という外部 NuGet パッケージに依存するため、これらは導入前に必ず
+  ライセンス(MIT 等の許諾条件、コピーレフト条項の有無、表示義務等)を確認し、個人利用の範囲で
+  問題ないことを確かめてから採用する (tasks.md T004)。今後さらに他の外部 NuGet パッケージの
+  導入が必要になった場合も、同様に導入前の確認を必須とする
+- **Rationale**: 人間から明示的に「OSS 等を使う場合はライセンスの確認をすること」との指示が
+  あったため。本体コードには現行の技術選定 (research.md #1, #2, #6, #8) で外部 OSS 依存は
+  発生していないが、テストランナーである xUnit は現時点で唯一該当する外部依存であり、
+  確認済みの上で導入する
+- **Alternatives considered**: テストランナーを使わず手動検証のみで済ませる案(FR-018 等の
+  ロジックは自動テストで継続的に保証する価値があるため不採用。research.md #7 参照)
+
+## 11. UI の見た目 (Windows 11 らしさ)
+
+- **Decision**: `OkidokeiWidget.App` の `App.xaml` に `ThemeMode="System"` を設定し、
+  .NET 9 で WPF に追加された標準の Fluent テーマ (`PresentationFramework.Fluent`、
+  .NET SDK/ランタイム同梱、追加の NuGet パッケージ不要) を適用する
+- **Rationale**: 実装後の実機確認で人間から「設定ダイアログが古臭い」「Windows 11 っぽくない」
+  との指摘を受けた。原因はフォントではなく、WPF の既定コントロールテンプレート(角丸なし・
+  クラシックな見た目)であった。人間から「OSS じゃなくて Windows 標準の新しいライブラリって
+  ないの?」との要望があり、.NET 9 以降 WPF 本体に組み込まれている公式の Fluent テーマ機能
+  (`Application.ThemeMode`)がこれに合致するため採用した
+- **Alternatives considered**:
+  - `WPF-UI`(lepoco/wpfui)等の OSS 製 Fluent 系 WPF UI ライブラリの導入(機能は豊富だが、
+    人間の要望により OSS への新規依存を避けるため不採用)
+  - 既定コントロールの `ControlTemplate` を自前で XAML 化して角丸・フラット化する案
+    (依存追加は不要だが、公式の Fluent テーマがそのまま使える以上、車輪の再発明になるため不採用)
+- **文字色選択 UI**: `System.Windows.Forms.ColorDialog`(Windows 2000 時代から見た目が変わって
+  いない共通ダイアログ)は Fluent テーマの対象外だったため、`OkidokeiWidget.App` に自作の
+  `ColorPickerWindow`(パレット + `#RRGGBB` 入力、WPF のみで実装)を追加して置き換えた。
+  これにより `System.Windows.Forms`/`System.Drawing` への依存も不要になったため、
+  `UseWindowsForms` を無効化し `ImplicitUsings` を再度有効化した
+  - **Alternatives considered**: WinUI3 の `ColorPicker`(XAML Islands 経由での WPF 連携が必要で、
+    個人用ツールの規模に対して過剰なため不採用)、`ColorDialog` を使い続ける案
+    (見た目が古いままになるため不採用)
+- **ダークモード時のタイトルバー**: `ThemeMode="System"` はウィンドウ内のコントロールの見た目
+  はダーク/ライトに追従させるが、ウィンドウのタイトルバー(非クライアント領域)までは自動で
+  追従しない。人間の実機(ダークモード設定)で「ダークモードに対応してない」との指摘を受け、
+  タイトルバーだけ白いまま取り残されていたことが原因と判明した。DWM API
+  (`DwmSetWindowAttribute` の `DWMWA_USE_IMMERSIVE_DARK_MODE`)をタイトルバーを持つ
+  ウィンドウ (`SettingsWindow`, `ColorPickerWindow`) に個別適用し、レジストリ
+  (`HKCU\...\Themes\Personalize\AppsUseLightTheme`) からシステムのダーク/ライト設定を読み取って
+  切り替える `WindowThemeHelper` を追加した(`ClockWindow` はタイトルバー自体を持たないため対象外)
+- **ダークモード時の文字が読めない不具合**: `SettingsWindow.xaml` の `Window.Resources` に
+  `GroupBox`/`TextBlock`/`CheckBox`/`ComboBox`/`Slider` の暗黙スタイル(`x:Key` なし、
+  余白調整のみが目的)を `BasedOn` 指定なしで定義していたため、Fluent テーマがそれぞれの型に
+  対して用意しているダーク/ライト対応の既定スタイル(文字色・背景色を含む)を丸ごと上書きして
+  しまい、チェックボックス横のラベルが黒文字のまま・コンボボックスのドロップダウン項目が
+  白文字のままになり、ダークモードで読めなくなっていた。各スタイルに
+  `BasedOn="{StaticResource {x:Type ...}}"` を追加し、Fluent テーマの既定スタイルへ差分を
+  積み増す形に修正して解消した(WPF で暗黙スタイルを部分的に上書きする際の定石)
+
+## 12. 詳細設定画面のレイアウト(タブ化)
+
+- **Decision**: `SettingsWindow` を `TabControl` で「表示」「フォント」「レイアウト・背景」の
+  3 タブに再編する。今後 US3(位置ロック・最前面表示)・US4(モニタ別表示・自動起動)で
+  増える設定項目も、新規タブまたは既存タブへの追加として収める方針とする
+- **Rationale**: Phase 9 で秒表示・時刻/日付それぞれのフォント設定・日付/曜日の表示形式等を
+  追加した結果、詳細設定画面が単一のスクロールしない縦一列レイアウトのままでは縦に伸び続けて
+  しまうと人間から指摘を受けた。個人用ツールであっても US3・US4 でさらに設定項目が増える
+  ことが分かっているため、この時点でレイアウトの拡張性に対応しておく方が手戻りが少ない
+- **Alternatives considered**:
+  - `ScrollViewer` で縦スクロール可能にするだけの案(実装は最小限だが、設定項目が多いと
+    どこに何があるか見渡しにくくなり、Windows 標準の設定アプリ的な体験からも外れるため不採用)
+  - ウィンドウを横に広げて 2 カラムにする案(画面の狭い環境で扱いにくくなる懸念があるため不採用)
+
+## 13. タスクトレイ常駐アイコン(最前面復帰用)
+
+- **Decision**: タスクトレイに常駐アイコンを追加する。ただし #8 で決定した「右クリックメニューを
+  ウィジェット本体に実装する」方針自体は変更せず、トレイアイコン側は「すべてのウィジェットを
+  最前面に呼び戻す(クリック)」「終了(右クリックメニュー)」のみを提供する薄い実装とする。
+  実装は `System.Windows.Forms.NotifyIcon` を使わず、`Shell_NotifyIcon`(shell32.dll)への
+  P/Invoke + 非表示の `HwndSource` によるメッセージ受信で行う
+- **Rationale**: 「最前面表示」を OFF にした状態でウィジェットが他のウィンドウの背後に完全に
+  隠れると、`ShowInTaskbar="False"`(タスクバー非表示)の設計上、前面に戻す手段が一切ない
+  ことが実機確認で判明した。#8 の「トレイアイコンを追加しない」という決定は、右クリックの
+  クイック切替 UI 全体をトレイアイコン化することへの反対であり、この具体的な使い勝手の欠落は
+  想定していなかったため、範囲を絞った上で再度決定し直した。`NotifyIcon`(WinForms)を使うと
+  `UseWindowsForms` の再有効化が必要になり、以前(research.md #11)`ImplicitUsings` の
+  WPF/WinForms 型名衝突を理由に切り離した経緯を再び持ち込んでしまう。`Shell_NotifyIcon` への
+  直接 P/Invoke であれば追加の NuGet パッケージも `UseWindowsForms` も不要で、
+  `OkidokeiWidget.Core` のモニタ列挙(`EnumDisplayMonitors` 等)と同様の「素の Win32 API」
+  という一貫した方針を保てる
+- **Alternatives considered**:
+  - `System.Windows.Forms.NotifyIcon`(実装は簡単だが `UseWindowsForms` の再有効化が必要で
+    `ImplicitUsings` 無効化+全ファイルへの明示 `using` 追加が再度必要になるため不採用)
+  - `Hardcodet.NotifyIcon.Wpf` 等の OSS ライブラリ(#8 で不採用とした理由と同じく、要求されて
+    いない機能への追加依存を避けるため不採用)
+  - トレイアイコンを追加せず、代わりにウィジェットを `ShowInTaskbar="True"` にしてタスクバー
+    経由で前面に戻す案(依存追加が不要な代替案として比較検討したが、人間からタスクトレイ
+    常駐アイコンの方が希望として明示されたため、そちらを採用した)
+
+## 14. アプリケーションアイコン
+
+- **Decision**: 時計をイメージした専用のアイコン(丸型の文字盤・針)を新規に作成し、
+  `src/OkidokeiWidget.App/app.ico` として追加する。`OkidokeiWidget.App.csproj` の
+  `ApplicationIcon` に指定して実行ファイルのアイコンとし、同じファイルを `ClockWindow`/
+  `SettingsWindow` の `Icon` プロパティおよびタスクトレイアイコン(research.md #13、
+  実行ファイル自身に埋め込まれたアイコンを実行時に抽出して使う)にも流用する
+- **Rationale**: 人間から「アプリアイコンが欲しい(デザインは任せる)」との要望があった。
+  既製のアイコン素材(OSS・フリー素材)を探して導入する案もあったが、ライセンス確認
+  (research.md #10 の方針)の手間や配布条件の制約を避けるため、シンプルな図形のみで構成される
+  アイコンを自作する方針とした
+- **Alternatives considered**: フリー素材サイトのアイコンを利用する案(ライセンス確認の手間と、
+  個人の思い通りのデザインにならない制約があるため、実装時に自作する方を選んだ)

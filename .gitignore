@@ -1,0 +1,12 @@
+# Claude Code local settings (may contain credentials/auth tokens)
+.claude/settings.local.json
+
+# .NET / Visual Studio
+bin/
+obj/
+*.user
+.vs/
+
+# OS
+Thumbs.db
+Desktop.ini
