@@ -42,7 +42,9 @@
     "\\\\?\\DISPLAY#GSM123B#5\u00263b7d6ecd\u00260\u0026UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}": {
       "IsVisible": true,
       "X": 1600,
-      "Y": 20
+      "Y": 20,
+      "Anchor": "TopRight",
+      "AnchorMargin": "Narrow"
     }
   },
   "AutoStartEnabled": true
@@ -61,6 +63,13 @@ Phase 7 (T038) で、実際に書き出された `settings.json` と上記の例
 - `TimeFontSize`・`DateFontSize`・`BackgroundOpacity` は `double` だが、値が整数のときは
   `24.0` ではなく `24` として書き出される
 - 上記以外のキー名・階層構造・型は、実ファイルと本契約とで一致している
+
+2026-09-24 に追加したフィールド (FR-034, FR-035、data-model.md の `MonitorPlacement`):
+
+- `Anchor`: `AnchorPosition` の enum 名 (`TopLeft`〜`BottomRight` の 9 値) または `null`。
+  `null` は自由配置を表し、`X`/`Y` を使う
+- `AnchorMargin`: `Narrow` または `Wide`
+- アンカー指定中も `X`/`Y` は書き出される (値は最後に自由配置していたときの位置)
 
 ## 読み込み契約
 
@@ -93,3 +102,8 @@ Phase 7 (T038) で、実際に書き出された `settings.json` と上記の例
   (YAGNI: 将来のマイグレーション要件は現時点で存在しない)
 - 未知の追加フィールドがファイル内に存在してもエラーにはせず無視する
   (デシリアライザの既定動作に従う)
+- `Anchor`・`AnchorMargin` を持たない (2026-09-24 より前の) 設定ファイルは、エラーにせず
+  そのまま読み込む。`Anchor` = null (自由配置)、`AnchorMargin` = `Narrow` として扱うため、
+  既存ユーザーの表示位置は変わらない (FR-034)。この互換性は単体テストで保証する
+- `Anchor`・`AnchorMargin` に未知の文字列が入っている場合は、パース不可として扱う
+  (上記「読み込み契約」のとおり全体をデフォルトへフォールバックし、ユーザーに通知する)

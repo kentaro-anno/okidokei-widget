@@ -10,8 +10,9 @@ namespace OkidokeiWidget.App;
 /// <summary>
 /// タスクトレイの常駐アイコンを、Shell_NotifyIcon への P/Invoke + 非表示の HwndSource で実装する
 /// (FR-031, FR-032、research.md #13。System.Windows.Forms.NotifyIcon は使わず、UseWindowsForms の
-/// 再有効化を避ける)。クリックで <see cref="ActivateAllRequested"/>、右クリックメニューの
-/// 「終了」で <see cref="ExitRequested"/> を発火する。
+/// 再有効化を避ける)。クリックで <see cref="ActivateAllRequested"/> を発火し、右クリックでは
+/// コンストラクタで受け取った関数が返すメニューを表示する。メニューの中身はウィジェット本体と
+/// 揃えるため <c>App</c> 側で組み立てる (FR-038、research.md #17)。
 /// </summary>
 public sealed class TrayIconManager : IDisposable
 {
@@ -60,14 +61,16 @@ public sealed class TrayIconManager : IDisposable
 
     private readonly HwndSource _hwndSource;
     private readonly Icon _icon;
+    private readonly Func<ContextMenu> _buildContextMenu;
     private NOTIFYICONDATA _iconData;
     private bool _disposed;
 
     public event Action? ActivateAllRequested;
-    public event Action? ExitRequested;
 
-    public TrayIconManager()
+    public TrayIconManager(Func<ContextMenu> buildContextMenu)
     {
+        _buildContextMenu = buildContextMenu;
+
         var parameters = new HwndSourceParameters("OkidokeiWidgetTrayHost")
         {
             Width = 0,
@@ -116,10 +119,8 @@ public sealed class TrayIconManager : IDisposable
 
     private void ShowContextMenu()
     {
-        var menu = new ContextMenu();
-        var exitItem = new MenuItem { Header = "終了" };
-        exitItem.Click += (_, _) => ExitRequested?.Invoke();
-        menu.Items.Add(exitItem);
+        // 設定値を反映したチェック状態にするため、開くたびに作り直す
+        var menu = _buildContextMenu();
 
         // 通常のコントロールに紐付かないメニューのため、非表示のホストウィンドウを
         // PlacementTarget にしてマウス位置に表示する

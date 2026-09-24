@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Windows;
+using System.Windows.Controls;
 using OkidokeiWidget.Core.Monitors;
 using OkidokeiWidget.Core.Persistence;
 using OkidokeiWidget.Core.Settings;
@@ -43,7 +44,10 @@ public partial class App : System.Windows.Application
         RefreshConnectedMonitors();
         SettingsRepository.Save(settings);
 
-        AutoStartManager.SetEnabled(settings.AutoStartEnabled);
+        // Startup フォルダのショートカット作成/削除は詳細設定での ON/OFF トグル時
+        // (OnAutoStartChanged) のみ行う。起動のたびにここで書き換えると、Release exe
+        // 以外の方法 (dotnet run 等) で起動した際にショートカットの対象が意図せず
+        // 上書きされてしまうため (issue #20)
         SyncClockWindows();
 
         if (fellBackToDefaults)
@@ -55,11 +59,10 @@ public partial class App : System.Windows.Application
                 MessageBoxImage.Warning);
         }
 
-        // タスクトレイの常駐アイコン: 最前面表示が無効な場合でもウィジェットを前面に呼び戻す
-        // 手段、および終了メニューを提供する (FR-031, FR-032、research.md #13)
-        _trayIconManager = new TrayIconManager();
+        // タスクトレイの常駐アイコン: クリックで最前面表示が無効でもウィジェットを前面に呼び戻し、
+        // 右クリックでウィジェット本体と同じ項目のメニューを出す (FR-031, FR-032, FR-038)
+        _trayIconManager = new TrayIconManager(BuildTrayContextMenu);
         _trayIconManager.ActivateAllRequested += ActivateAllClockWindows;
-        _trayIconManager.ExitRequested += Shutdown;
 
         // 稼働中のモニタ接続/取り外しを検知し、表示を追随させる (T044、Edge Case: 稼働中の
         // モニタ切断時は自動非表示、設定は保持)
@@ -120,9 +123,76 @@ public partial class App : System.Windows.Application
 
     private void CreateClockWindow(ConnectedMonitor monitor, MonitorPlacement placement)
     {
-        var window = new ClockWindow(_settings, monitor, placement, OpenSettingsWindow, OnWindowBehaviorChanged);
+        var window = new ClockWindow(_settings, monitor, placement, OpenSettingsWindow, OnWindowBehaviorChanged, OnDisplaySettingsChanged);
         _clockWindowsByMonitor[monitor.Identifier] = window;
         window.Show();
+    }
+
+    /// <summary>
+    /// タスクトレイの右クリックメニューを組み立てる。項目はウィジェット本体と同じで、「配置」の
+    /// 下にだけモニタを選ぶ階層が入る (FR-038、contracts/context-menus.md)。
+    /// </summary>
+    private ContextMenu BuildTrayContextMenu()
+    {
+        var behavior = _settings.WindowBehavior;
+        var menu = new ContextMenu();
+
+        var settingsItem = new MenuItem { Header = "詳細設定..." };
+        settingsItem.Click += (_, _) => OpenSettingsWindow();
+        menu.Items.Add(settingsItem);
+
+        menu.Items.Add(new Separator());
+
+        // Fluent テーマは IsCheckable が true の項目にしかチェックを描かない (issue #34)。
+        // メニューは開くたびに作り直すので、クリックで IsChecked が反転しても表示と食い違わない
+        var positionLockItem = new MenuItem { Header = "位置ロック", IsCheckable = true, IsChecked = behavior.PositionLocked };
+        positionLockItem.Click += (_, _) =>
+        {
+            behavior.PositionLocked = !behavior.PositionLocked;
+            OnWindowBehaviorChanged();
+        };
+        menu.Items.Add(positionLockItem);
+
+        var topMostItem = new MenuItem { Header = "最前面表示", IsCheckable = true, IsChecked = behavior.TopMost };
+        topMostItem.Click += (_, _) =>
+        {
+            behavior.TopMost = !behavior.TopMost;
+            OnWindowBehaviorChanged();
+        };
+        menu.Items.Add(topMostItem);
+
+        // モニタが 1 台でもこの階層は省略しない。非表示のモニタは右クリックできるウィジェットが
+        // ないため対象外とする (research.md #17)
+        var placementItem = new MenuItem { Header = "配置" };
+        foreach (var monitor in _connectedMonitors.OrderBy(m => m.DisplayNumber))
+        {
+            if (!_clockWindowsByMonitor.TryGetValue(monitor.Identifier, out var window))
+            {
+                continue;
+            }
+
+            // 詳細設定画面 (SettingsWindow) のモニタ一覧と同じ表記
+            var label = monitor.IsPrimary ? $"モニター {monitor.DisplayNumber} (プライマリ)" : $"モニター {monitor.DisplayNumber}";
+            placementItem.Items.Add(PlacementMenuBuilder.Build(
+                label,
+                _settings.Monitors[monitor.Identifier],
+                behavior.PositionLocked,
+                window.SetAnchorHorizontal,
+                window.SetAnchorVertical,
+                window.SetAnchorMargin));
+        }
+
+        // すべてのモニタで非表示にしていると配置の対象がない
+        placementItem.IsEnabled = placementItem.Items.Count > 0;
+        menu.Items.Add(placementItem);
+
+        menu.Items.Add(new Separator());
+
+        var exitItem = new MenuItem { Header = "終了" };
+        exitItem.Click += (_, _) => Shutdown();
+        menu.Items.Add(exitItem);
+
+        return menu;
     }
 
     private void ActivateAllClockWindows()

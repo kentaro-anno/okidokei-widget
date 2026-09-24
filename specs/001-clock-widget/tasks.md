@@ -5,9 +5,9 @@ description: "Task list template for feature implementation"
 
 # Tasks: 常駐デスクトップ時計ウィジェット
 
-**Input**: `/specs/001-clock-widget/` 配下の設計ドキュメント (plan.md, spec.md, research.md, data-model.md, contracts/settings-file.md, quickstart.md)
+**Input**: `/specs/001-clock-widget/` 配下の設計ドキュメント (plan.md, spec.md, research.md, data-model.md, contracts/settings-file.md, contracts/context-menus.md, quickstart.md)
 
-**Prerequisites**: plan.md、spec.md (必須)、research.md、data-model.md、contracts/settings-file.md、quickstart.md
+**Prerequisites**: plan.md、spec.md (必須)、research.md、data-model.md、contracts/settings-file.md、contracts/context-menus.md (Phase 14 以降)、quickstart.md
 
 **Tests**: plan.md の Testing 方針 (research.md #7) により、`OkidokeiWidget.Core` の設定読み書き・
 デフォルトへのフォールバック・モニタ識別子マッチングのロジックは xUnit 単体テストで検証する。
@@ -494,6 +494,201 @@ FR-022(書き込み失敗耐性)・Edge Case(稼働中のモニタ切断)に対�
 
 ---
 
+## Phase 13: DPI 変更時に位置ロックがずれるバグの修正 (2026-09-24)
+
+**Purpose**: issue #25 の修正の記録。既存 FR (FR-010, FR-020) の実装バグであり、仕様の追加・
+変更は伴わない。修正は `bug` 拡張のフローで PR #27 として実施済み (経緯・検証結果は
+`.specify/bugs/dpi-position-drift/` を参照)。本 Phase は、CLAUDE.md の「既存 FR の実装バグは
+`tasks.md` に新しい Phase として追記する」ルールに従い、修正後に追記したもの
+
+- issue #25: 位置ロック中でも、DPI スケールだけが変わるとウィジェットの位置がずれる。
+  `WM_DISPLAYCHANGE` は解像度変更時にしか届かず、WPF が Windows の提案する位置へウィンドウを
+  動かしたまま、保存済みの位置へ戻していなかった
+
+- [X] T073 [US4] `src/OkidokeiWidget.App/ClockWindow.xaml.cs` のコンストラクタに
+      `Action onDpiChanged` を追加し、`Window.DpiChanged` で呼び出す (issue #25)
+- [X] T074 [US4] `src/OkidokeiWidget.App/App.xaml.cs` の `CreateClockWindow()` で、既存の
+      `OnDisplaySettingsChanged` を `onDpiChanged` として渡す。モニタ情報の再取得と全
+      ウィンドウの再配置を、解像度変更時と同じ経路で行うため (T073 に依存)
+
+**Checkpoint**: `dotnet build`・`dotnet test` が成功し、位置ロック中に表示スケールを変更すると
+ウィジェットが保存済みの位置へ配置し直されること (人間が実機で確認済み)
+
+---
+
+## Phase 14: アンカー指定と右クリックメニューの統一 (2026-09-24)
+
+**Purpose**: issue #26 を受けて spec.md に追加した FR-034〜FR-038 と、FR-010・FR-012・SC-004・
+SC-007 の改訂に対応する。すべて User Story 3「配置を自由に決め、誤操作から保護する」に属する。
+設計は plan.md の「既存実装に対する変更計画 (2026-09-24)」、research.md #15〜#17、
+data-model.md の `MonitorPlacement`、contracts/context-menus.md に従う
+
+**Independent Test**: ウィジェットを右クリック→「配置」→「右上」でウィジェットが作業領域の
+右上へ移動し、フォントサイズや拡大率を変えても右上に留まること。位置ロック中は「配置」の
+中の項目がグレーアウトすること (サブメニュー自体は開ける)。タスクトレイの右クリックメニューが本体と同じ項目を持ち、モニタを選んで
+から配置を変えられること
+
+### Core: 設定モデルと位置計算
+
+- [X] T075 [P] [US3] `src/OkidokeiWidget.Core/Settings/AnchorPosition.cs` に、`TopLeft`・`Top`・
+      `TopRight`・`Left`・`Center`・`Right`・`BottomLeft`・`Bottom`・`BottomRight` の 9 値を持つ
+      enum `AnchorPosition` を定義する (FR-034、research.md #15)
+- [X] T076 [P] [US3] `src/OkidokeiWidget.Core/Settings/AnchorMargin.cs` に、`Narrow` (狭め)・
+      `Wide` (広め) の 2 値を持つ enum `AnchorMargin` を定義する (FR-035)
+- [X] T077 [US3] `src/OkidokeiWidget.Core/Settings/MonitorPlacement.cs` に
+      `AnchorPosition? Anchor` (既定値 null) と `AnchorMargin AnchorMargin` (既定値 `Narrow`) を
+      追加する。data-model.md の制約: 「null なら自由配置で `X`/`Y` を使う。値があれば `X`/`Y` を
+      無視してアンカーから位置を計算する」「未知の enum 値は JSON 全体のパース失敗として扱い、
+      `WidgetSettings` 全体をデフォルトへフォールバックする」。`SettingsRepository` は既存の
+      `JsonStringEnumConverter` のまま変更しない (T075、T076 に依存)
+- [X] T078 [US3] `src/OkidokeiWidget.Core/Monitors/WidgetPlacementCalculator.cs` の
+      `ToAbsolutePosition()` に引数 `double dpiScale` を追加し、`placement.Anchor` が null でない
+      場合はアンカーから位置を計算する (research.md #15)。T077 に依存
+      - 余白は定数 `NarrowMarginDip = 8`・`WideMarginDip = 24` に `dpiScale` を掛け、四捨五入して
+        物理ピクセルにする
+      - 横位置: 左 = `作業領域の左端 + 余白`、中央 = `作業領域の左端 + (作業領域の幅 - ウィジェット幅) / 2`
+        (余白は使わない)、右 = `作業領域の右端 - ウィジェット幅 - 余白`。縦位置も同様
+      - 計算結果は既存の `Clamp` で作業領域内へ収める。`Anchor` が null の場合の計算は変更しない
+      - 既存の呼び出し元 (`ClockWindow.xaml.cs`) とテストは、この時点では `dpiScale: 1.0` を渡す
+        形で修正してビルドを通す
+- [X] T079 [P] [US3] `tests/OkidokeiWidget.Core.Tests/Monitors/WidgetPlacementCalculatorTests.cs`
+      に単体テストを追加する (T078 に依存)
+      - 9 つの配置それぞれについて、`Narrow`・`dpiScale` 1.0 で期待どおりの座標になる
+      - `Wide`・`dpiScale` 1.5 で余白が 36 px になる (例: `TopRight`)
+      - 中央の軸では余白が使われない
+      - ウィジェットが作業領域より大きい場合は左上に合わせて収まる
+      - `Anchor` が null の場合は既存テストと同じ結果になる
+- [X] T080 [P] [US3] `tests/OkidokeiWidget.Core.Tests/Persistence/SettingsRepositoryTests.cs` に
+      単体テストを追加する (T077 に依存)
+      - `Anchor`・`AnchorMargin` を含まない既存形式の JSON を読むと、`Anchor` = null、
+        `AnchorMargin` = `Narrow` になり、`FellBackToDefaults` は false (FR-034)
+      - `Anchor` = `TopRight`、`AnchorMargin` = `Wide` を保存して読み戻すと値が一致する
+      - `Anchor` に未知の文字列 (例: `"Middle"`) が入っていると、デフォルト設定に
+        フォールバックし `FellBackToDefaults` が true になる
+
+### App: ウィジェット本体
+
+- [X] T081 [P] [US3] `src/OkidokeiWidget.App/PlacementMenuBuilder.cs` を新規作成し、1 モニタ分の
+      配置サブメニューを作る静的メソッドを実装する (research.md #17、contracts/context-menus.md)。
+      T077 に依存
+      - 引数: メニューの見出し (`"配置"` やモニタ名)、対象の `MonitorPlacement`、位置ロック中か
+        どうか (`bool isLocked`)、配置を選んだときのコールバック (`Action<AnchorPosition>`)、
+        余白を選んだときのコールバック (`Action<AnchorMargin>`)。戻り値は子項目を持つ `MenuItem`
+      - 子項目: 「左上」「上」「右上」「左」「中央」「右」「左下」「下」「右下」、区切り線、
+        「余白: 狭め」「余白: 広め」
+      - チェック: 9 項目は `placement.Anchor` と一致する 1 項目のみ。null ならどれも付けない。
+        余白は `placement.AnchorMargin` 側に付ける
+      - グレーアウト: `isLocked` が true なら、9 項目と余白 2 項目の `IsEnabled` を false にする。
+        戻り値の親 `MenuItem` 自体は有効のままにする。WPF では無効な親のサブメニューは開けず、
+        spec の「項目は表示されたままグレーアウト」(Acceptance Scenario 10) を満たせないため
+        (FR-010、contracts/context-menus.md)。チェック状態はロック中も通常どおり付ける
+- [X] T082 [US3] `src/OkidokeiWidget.App/ClockWindow.xaml.cs` の配置処理を更新する (T078 に依存)
+      - `ApplyPlacement()` で `VisualTreeHelper.GetDpi(this).DpiScaleX` を `dpiScale` として渡す
+      - `SizeChanged` でも `ApplyPlacement()` を呼ぶ。フォントサイズ変更や日付/曜日表示の切り替えで
+        サイズが変わっても、アンカーからの位置を保つため (SC-007)
+      - ドラッグ終了時 (`BackgroundBorder_MouseLeftButtonUp`) の保存前に `_placement.Anchor = null`
+        にする (FR-036)
+- [X] T083 [US3] `src/OkidokeiWidget.App/ClockWindow.xaml.cs` に public メソッド
+      `SetAnchor(AnchorPosition)`・`SetAnchorMargin(AnchorMargin)` を追加する。どちらも
+      `_placement` を更新し、`ApplyPlacement()` で再配置してから `SettingsRepository.Save()` する。
+      位置ロック中は何もしない (FR-010)。本体とトレイの両方からこのメソッドを使い、配置変更の経路を
+      1 つにする (T082 に依存)
+- [X] T084 [US3] `src/OkidokeiWidget.App/ClockWindow.xaml` の右クリックメニューで、「最前面表示」の
+      下に `x:Name="PlacementMenuItem"` の「配置」を追加する。`ClockWindow.xaml.cs` で
+      右クリックメニューを開く直前 (メニューが付いている `BackgroundBorder` の
+      `ContextMenuOpening`) に、`PlacementMenuBuilder` で作った子項目で `PlacementMenuItem` の
+      中身を置き換える。`isLocked` には `PositionLocked` を渡し、`PlacementMenuItem` 自体は
+      無効にしない (T081 のグレーアウトの規則)。コールバックは T083 の `SetAnchor`・
+      `SetAnchorMargin` を呼ぶ (FR-010, FR-037)。T081、T083 に依存
+
+### App: タスクトレイ
+
+- [X] T085 [US3] `src/OkidokeiWidget.App/TrayIconManager.cs` の右クリックメニューの組み立てを
+      外に出す。コンストラクタで `Func<ContextMenu>` を受け取り、右クリック時にそれが返す
+      メニューを表示するだけにする。「終了」だけを持つ現在のメニュー組み立てと `ExitRequested`
+      イベントは削除する。左クリックの `ActivateAllRequested` は変更しない (research.md #17)。
+      `src/OkidokeiWidget.App/App.xaml.cs` の `TrayIconManager` の生成箇所と `ExitRequested` の
+      購読も合わせて直し、ビルドが通る状態にする。この時点では「終了」だけのメニューを返す
+      `Func<ContextMenu>` を渡しておき、T086 で本来のメニューに置き換える
+- [X] T086 [US3] `src/OkidokeiWidget.App/App.xaml.cs` に、トレイの右クリックメニューを組み立てる
+      メソッドを追加し、`TrayIconManager` に渡す (FR-038、contracts/context-menus.md)。
+      T084、T085 に依存
+      - 項目: 「詳細設定...」(`OpenSettingsWindow`)、区切り線、「位置ロック」「最前面表示」
+        (チェック付き。クリックで値を反転して既存の `OnWindowBehaviorChanged` を呼ぶ)、「配置」、
+        区切り線、「終了」(`Shutdown`)
+      - 「配置」の下には、ウィジェットを表示中のモニタ (`_clockWindowsByMonitor` にあるもの) ごとに
+        `PlacementMenuBuilder` で作ったサブメニューを並べる。見出しは `SettingsWindow.xaml.cs` と
+        同じ「モニター N」「モニター N (プライマリ)」形式。コールバックは該当モニタの
+        `ClockWindow.SetAnchor`・`SetAnchorMargin` を呼ぶ
+      - 位置ロック中は、各モニタの `PlacementMenuBuilder` に `isLocked: true` を渡して中の項目を
+        グレーアウトする。「配置」とモニタ名の項目は無効にしない (FR-010、T081 の規則)
+      - モニタが 1 台だけでも、モニタ一覧の階層は省略しない
+
+### 実機確認中の変更: 配置メニューを軸ごとに選ぶ形へ
+
+T087 の実機確認で、9 つの配置を 1 列に並べたメニューは「縦にずらずら並んで直感的に分かり
+にくい」との指摘があった。メニューを「横位置 ▶ 左/中央/右」「縦位置 ▶ 上/中央/下」「余白 ▶
+狭め/広め」に変更する。保存形式 (9 値の `Anchor`) は変えない。T081・T083 の記述のうち、9 項目を
+並べる部分と `SetAnchor(AnchorPosition)` を public にする部分は、以下のタスクで置き換えた
+(research.md #15 の追記、contracts/context-menus.md)
+
+- [X] T088 [P] [US3] `src/OkidokeiWidget.Core/Settings/AnchorAxes.cs` を追加する。enum
+      `AnchorHorizontal` (`Left`/`Center`/`Right`)・`AnchorVertical` (`Top`/`Center`/`Bottom`) と、
+      9 値の `AnchorPosition` との相互変換 (`HorizontalOf`・`VerticalOf`・`Compose`) を持つ
+- [X] T089 [US3] `src/OkidokeiWidget.Core/Monitors/WidgetPlacementCalculator.cs` に
+      `WithHorizontal()`・`WithVertical()` を追加する。片方の軸を選んだときのもう片方は、アンカー
+      指定中なら今の値のまま、自由配置中なら作業領域を 3 等分してウィジェットの中心がある所にする。
+      `tests/OkidokeiWidget.Core.Tests/Monitors/WidgetPlacementCalculatorTests.cs` に単体テストを
+      追加する (T088 に依存)
+- [X] T090 [US3] `src/OkidokeiWidget.App/PlacementMenuBuilder.cs` のサブメニューを「横位置」「縦位置」
+      「余白」の 3 階層に変更する。位置ロック中に無効にするのは末端の選択肢のみ。
+      `ClockWindow.xaml.cs` の public メソッドを `SetAnchorHorizontal()`・`SetAnchorVertical()`・
+      `SetAnchorMargin()` にし (`SetAnchor()` は private に)、`App.xaml.cs` のトレイのメニューも
+      これを使う (T089 に依存)
+
+### 確認
+
+- [X] T087 [US3] `dotnet build`・`dotnet test` が成功することを確認し、`quickstart.md` の
+      「US3: 配置とロック」→「アンカー指定」の手動シナリオを人間に実施してもらう。結果と、
+      余白の値 (8 / 24 DIP) を調整した場合はその値を本 Phase の末尾に記録する (T079〜T086、
+      T088〜T090 に依存)
+
+**Checkpoint**: `dotnet test` が全件成功し、quickstart.md の「アンカー指定」のシナリオが
+すべて期待どおりに動作する状態。既存の `settings.json` のまま起動しても位置が変わらないこと
+
+### Phase 14 の確認結果 (2026-09-24)
+
+- `dotnet build` (Debug・Release とも警告 0、エラー 0)、`dotnet test` (70 件すべて合格。
+  Phase 14 で 31 件を追加)
+- 人間が Debug 版を実機で起動して確認し、問題なし。確認の途中で配置メニューの構成を変更した
+  (T088〜T090)
+- 余白の値は当初の 8 / 24 DIP のまま変更なし
+- (2026-09-24 追記) この確認では、右クリックメニューのチェックマークが表示されていないことを
+  見落としていた。Phase 15 (issue #34) で修正
+
+---
+
+## Phase 15: 右クリックメニューのチェックマークが表示されないバグの修正 (2026-09-24)
+
+**Purpose**: issue #34 の修正の記録。既存 FR (FR-037, FR-038) の実装バグであり、仕様の追加・
+変更は伴わない。修正は `bug` 拡張のフローで行った (経緯・検証結果は
+`.specify/bugs/menu-check-marks/` を参照)
+
+- issue #34: コードで組み立てている右クリックメニューの項目 (配置サブメニューと、タスクトレイの
+  「位置ロック」「最前面表示」) で、チェックマークが表示されない。Fluent テーマの `MenuItem` は、
+  `IsCheckable` が true の項目にしかチェックの枠を表示しないため。公開リポジトリの README 用に
+  スクリーンショットを撮った際に見つかった
+
+- [X] T091 [US3] `src/OkidokeiWidget.App/PlacementMenuBuilder.cs` の配置サブメニューの選択肢に
+      `IsCheckable = true` を付ける (issue #34)
+- [X] T092 [US3] `src/OkidokeiWidget.App/App.xaml.cs` の `BuildTrayContextMenu()` の
+      「位置ロック」「最前面表示」に `IsCheckable = true` を付ける (issue #34)
+
+**Checkpoint**: `dotnet build`・`dotnet test` が成功し、本体の「配置 ▶ 横位置」で今の配置に、
+タスクトレイの「位置ロック」に、チェックが表示されること (実機で撮影して確認済み)
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -506,6 +701,15 @@ FR-022(書き込み失敗耐性)・Edge Case(稼働中のモニタ切断)に対�
 - **Phase 8 (/speckit-analyze 指摘の反映)**: T039・T042・T044 は Foundational (T011, T010) の
   後であれば着手可能。T041 は US1 (T016) に、T045 は US4 (T016, T033) に依存するため、
   それぞれ対応するユーザーストーリーの実装後が自然
+- **Phase 13 (issue #25)**: 実施済み (PR #27)
+- **Phase 14 (アンカー指定)**: Phase 12 (`WidgetPlacementCalculator`・物理ピクセルでの配置) と
+  Phase 13 (`DpiChanged` での再配置) の上に積む。Phase 内の順序は以下のとおり
+  - T075・T076 (enum) → T077 (`MonitorPlacement`) → T078 (位置計算)
+  - T079・T080 (テスト) と T081 (`PlacementMenuBuilder`) は、T077/T078 の後に並行して着手できる
+  - T082 → T083 → T084 (本体のメニュー) の順
+  - T085 (`TrayIconManager`) は T077 以降いつでも着手できる。T086 (トレイのメニュー) は
+    T084・T085 の後
+  - T087 (確認) は最後
 
 ### User Story Dependencies
 

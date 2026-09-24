@@ -13,13 +13,16 @@
     <Border x:Name="BackgroundBorder" CornerRadius="6"
             PreviewMouseLeftButtonDown="BackgroundBorder_PreviewMouseLeftButtonDown"
             MouseMove="BackgroundBorder_MouseMove"
-            MouseLeftButtonUp="BackgroundBorder_MouseLeftButtonUp">
+            MouseLeftButtonUp="BackgroundBorder_MouseLeftButtonUp"
+            ContextMenuOpening="BackgroundBorder_ContextMenuOpening">
         <Border.ContextMenu>
             <ContextMenu>
                 <MenuItem Header="詳細設定..." Click="OpenSettingsMenuItem_Click" />
                 <Separator />
                 <MenuItem x:Name="PositionLockMenuItem" Header="位置ロック" IsCheckable="True" Click="PositionLockMenuItem_Click" />
                 <MenuItem x:Name="TopMostMenuItem" Header="最前面表示" IsCheckable="True" Click="TopMostMenuItem_Click" />
+                <!-- 子項目は開くたびに PlacementMenuBuilder で作り直す (contracts/context-menus.md) -->
+                <MenuItem x:Name="PlacementMenuItem" Header="配置" />
                 <Separator />
                 <MenuItem Header="終了" Click="ExitMenuItem_Click" />
             </ContextMenu>

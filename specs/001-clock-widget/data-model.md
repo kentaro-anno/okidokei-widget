@@ -1,6 +1,6 @@
 # Phase 1 Data Model: 常駐デスクトップ時計ウィジェット
 
-**Feature**: `001-clock-widget` | **Date**: 2026-09-17
+**Feature**: `001-clock-widget` | **Date**: 2026-09-17 (2026-09-24 更新: アンカー指定の追加)
 
 `spec.md` の Key Entities を、`OkidokeiWidget.Core` 内の設定モデルとして具体化する。すべて
 `%APPDATA%\OkidokeiWidget\settings.json` へ 1 つの JSON ドキュメントとしてシリアライズされる
@@ -54,7 +54,7 @@
 | フィールド | 型 | 説明 |
 |---|---|---|
 | `TopMost` | `bool` | 常に最前面に表示するか |
-| `PositionLocked` | `bool` | 位置ロック中かどうか(ロック中はドラッグ移動を無効化) |
+| `PositionLocked` | `bool` | 位置ロック中かどうか(ロック中はドラッグ移動と、右クリックメニューからの配置・余白の変更を無効化) |
 
 ## MonitorPlacement
 
@@ -64,8 +64,21 @@
 | フィールド | 型 | 説明 |
 |---|---|---|
 | `IsVisible` | `bool` | このモニタにウィジェットを表示するか |
-| `X` | `int` | モニタの作業領域左上を基準としたウィンドウ左端の位置 |
-| `Y` | `int` | モニタの作業領域左上を基準としたウィンドウ上端の位置 |
+| `X` | `int` | モニタの作業領域左上を基準としたウィンドウ左端の位置 (物理ピクセル) |
+| `Y` | `int` | モニタの作業領域左上を基準としたウィンドウ上端の位置 (物理ピクセル) |
+| `Anchor` | `AnchorPosition?` (enum 名、null 許容) | アンカー指定 (FR-034)。null なら自由配置で `X`/`Y` を使う。値があれば `X`/`Y` を無視してアンカーから位置を計算する |
+| `AnchorMargin` | `AnchorMargin` (enum 名) | アンカー指定時の画面端からの余白 (FR-035)。既定値は `Narrow`。自由配置中も値を保持する |
+
+- `AnchorPosition` と `AnchorMargin` は本アプリ専用の enum で、`src/OkidokeiWidget.Core/Settings/`
+  に定義する
+  - `AnchorPosition`: `TopLeft`・`Top`・`TopRight`・`Left`・`Center`・`Right`・`BottomLeft`・
+    `Bottom`・`BottomRight` の 9 値 (横位置×縦位置の組み合わせ。research.md #15)
+  - `AnchorMargin`: `Narrow` (狭め、8 DIP)・`Wide` (広め、24 DIP)
+- 未知の enum 値は、既存の `DateDayOfWeekPosition` と同じく JSON 全体のパース失敗として扱い、
+  `WidgetSettings` 全体をデフォルトへフォールバックする
+- 既存の設定ファイルには `Anchor`・`AnchorMargin` が存在しない。読み込むと `Anchor` = null
+  (自由配置)、`AnchorMargin` = `Narrow` になり、既存ユーザーの表示位置は変わらない
+  (FR-034、research.md #16)
 
 - **キー(モニタ識別子)**: `EnumDisplayDevices` から取得する EDID 由来のデバイス ID
   (research.md #2)。実際の書式は `EDD_GET_DEVICE_INTERFACE_NAME` 付きで取得する
@@ -92,3 +105,14 @@
   正しい内容で置き換えられる(自動修復は行わず、次回保存時に正しい状態が書き込まれる)
 - `Monitors` 内の各エントリは、対応する物理モニタが接続されている間のみ実際の表示に影響する。
   接続されていないモニタのエントリは保持されるだけで、表示ロジックからは無視される
+
+### MonitorPlacement の配置モードの遷移 (FR-034, FR-036, FR-010)
+
+| 現在の状態 | 操作 | 遷移後 |
+|---|---|---|
+| 自由配置 (`Anchor` = null) | 右クリックメニューで横位置 (または縦位置) を選ぶ | アンカー指定。選んだ軸はその値、もう片方の軸は今の位置から一番近いもの (research.md #15 の追記)。`X`/`Y` はそのまま残す |
+| アンカー指定 | 右クリックメニューで横位置 (または縦位置) を選ぶ | アンカー指定。選んだ軸だけが変わり、もう片方の軸は今の値のまま |
+| アンカー指定 | ドラッグで移動する | 自由配置 (`Anchor` = null、`X`/`Y` = ドラッグ後の位置) |
+| 自由配置 | ドラッグで移動する | 自由配置 (`X`/`Y` = ドラッグ後の位置。既存の挙動) |
+| どちらでも | 余白を選ぶ | `AnchorMargin` のみ更新。アンカー指定中なら再配置する |
+| どちらでも (位置ロック中) | 配置・余白・ドラッグ | 変化しない (配置の項目はグレーアウト、ドラッグは無効) |

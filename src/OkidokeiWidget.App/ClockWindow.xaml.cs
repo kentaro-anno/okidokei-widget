@@ -21,6 +21,7 @@ public partial class ClockWindow : Window
     private ConnectedMonitor _monitor;
     private readonly Action _openSettingsWindow;
     private readonly Action _onWindowBehaviorChanged;
+    private readonly Action _onDpiChanged;
     private readonly DispatcherTimer _timer;
     private bool _isDragging;
     private Point _dragLastPointerPosition;
@@ -30,7 +31,8 @@ public partial class ClockWindow : Window
         ConnectedMonitor monitor,
         MonitorPlacement placement,
         Action openSettingsWindow,
-        Action onWindowBehaviorChanged)
+        Action onWindowBehaviorChanged,
+        Action onDpiChanged)
     {
         InitializeComponent();
 
@@ -39,6 +41,7 @@ public partial class ClockWindow : Window
         _monitor = monitor;
         _openSettingsWindow = openSettingsWindow;
         _onWindowBehaviorChanged = onWindowBehaviorChanged;
+        _onDpiChanged = onDpiChanged;
 
         // MonitorPlacement.X/Y はモニタの作業領域左上を基準とした相対座標のため、仮想
         // デスクトップ上の絶対座標 (物理ピクセル) へ変換してから配置する (data-model.md)。
@@ -46,6 +49,15 @@ public partial class ClockWindow : Window
         // ウィンドウサイズが確定する ContentRendered で作業領域内へ収め直す (issue #10)
         SourceInitialized += (_, _) => ApplyPlacement();
         ContentRendered += (_, _) => ApplyPlacement();
+
+        // フォントサイズや日付/曜日表示の変更でサイズが変わっても、アンカーからの位置を保つ (SC-007)
+        SizeChanged += (_, _) => ApplyPlacement();
+
+        // DPI スケールのみの変更 (WM_DISPLAYCHANGE は飛ばない) では、既定では WPF が Windows の
+        // 提案する矩形へウィンドウを自動移動させてしまい、位置ロック中でも保存済み座標からずれる。
+        // DpiChanged は WPF のその自動移動が完了した後に発火するため、ここで最新のモニタ情報へ
+        // 差し替えて保存済みの座標から配置し直すことでロック位置を維持する (issue #25)
+        DpiChanged += (_, _) => _onDpiChanged();
 
         ApplyAppearance();
         ApplyWindowBehavior();
@@ -67,16 +79,80 @@ public partial class ClockWindow : Window
     }
 
     /// <summary>
-    /// 保存された相対座標に従ってウィンドウを配置する。座標は WPF の論理単位ではなく物理
-    /// ピクセルで扱う (issue #10、<see cref="WindowPositionHelper"/>)。
+    /// 保存された配置 (相対座標またはアンカー指定) に従ってウィンドウを配置する。座標は WPF の
+    /// 論理単位ではなく物理ピクセルで扱う (issue #10、<see cref="WindowPositionHelper"/>)。
     /// </summary>
     private void ApplyPlacement()
     {
         var bounds = WindowPositionHelper.TryGetBounds(this);
+        var dpiScale = VisualTreeHelper.GetDpi(this).DpiScaleX;
         var (x, y) = WidgetPlacementCalculator.ToAbsolutePosition(
-            _monitor, _placement, bounds?.Width ?? 0, bounds?.Height ?? 0);
+            _monitor, _placement, bounds?.Width ?? 0, bounds?.Height ?? 0, dpiScale);
 
         WindowPositionHelper.MoveTo(this, x, y);
+    }
+
+    /// <summary>
+    /// このモニタの横位置を変更してアンカー指定にする。縦位置は、アンカー指定中ならそのまま、
+    /// 自由配置中なら今の位置から一番近いものにする (research.md #15)。本体とタスクトレイの
+    /// どちらのメニューからもこの経路で変更する (research.md #17)。位置ロック中は何もしない (FR-010)。
+    /// </summary>
+    public void SetAnchorHorizontal(AnchorHorizontal horizontal)
+    {
+        if (_settings.WindowBehavior.PositionLocked || WindowPositionHelper.TryGetBounds(this) is not { } bounds)
+        {
+            return;
+        }
+
+        SetAnchor(WidgetPlacementCalculator.WithHorizontal(_monitor, _placement, horizontal, bounds.Y, bounds.Height));
+    }
+
+    /// <summary>
+    /// このモニタの縦位置を変更してアンカー指定にする。横位置の決め方は
+    /// <see cref="SetAnchorHorizontal"/> と同じ。
+    /// </summary>
+    public void SetAnchorVertical(AnchorVertical vertical)
+    {
+        if (_settings.WindowBehavior.PositionLocked || WindowPositionHelper.TryGetBounds(this) is not { } bounds)
+        {
+            return;
+        }
+
+        SetAnchor(WidgetPlacementCalculator.WithVertical(_monitor, _placement, vertical, bounds.X, bounds.Width));
+    }
+
+    private void SetAnchor(AnchorPosition anchor)
+    {
+        _placement.Anchor = anchor;
+        ApplyPlacement();
+        SettingsRepository.Save(_settings);
+    }
+
+    /// <summary>
+    /// このモニタのアンカー指定時の余白を変更する。自由配置中は値を保存するだけで、位置は
+    /// 変わらない (research.md #16)。位置ロック中は何もしない (FR-010)。
+    /// </summary>
+    public void SetAnchorMargin(AnchorMargin margin)
+    {
+        if (_settings.WindowBehavior.PositionLocked)
+        {
+            return;
+        }
+
+        _placement.AnchorMargin = margin;
+        ApplyPlacement();
+        SettingsRepository.Save(_settings);
+    }
+
+    private void BackgroundBorder_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        PlacementMenuBuilder.Populate(
+            PlacementMenuItem,
+            _placement,
+            _settings.WindowBehavior.PositionLocked,
+            SetAnchorHorizontal,
+            SetAnchorVertical,
+            SetAnchorMargin);
     }
 
     public void ApplyWindowBehavior()
@@ -224,6 +300,9 @@ public partial class ClockWindow : Window
         var (relativeX, relativeY) = WidgetPlacementCalculator.ToRelativePosition(_monitor, bounds.X, bounds.Y);
         _placement.X = relativeX;
         _placement.Y = relativeY;
+
+        // ドラッグで動かしたら、以後はアンカーではなくドラッグ後の座標を使う (FR-036)
+        _placement.Anchor = null;
         SettingsRepository.Save(_settings);
     }
 }
