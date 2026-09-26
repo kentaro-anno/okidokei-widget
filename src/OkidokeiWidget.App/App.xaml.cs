@@ -179,7 +179,8 @@ public partial class App : System.Windows.Application
                 behavior.PositionLocked,
                 window.SetAnchorHorizontal,
                 window.SetAnchorVertical,
-                window.SetAnchorMargin));
+                window.SetAnchorMargin,
+                window.CanSelectAnchorMargin));
         }
 
         // すべてのモニタで非表示にしていると配置の対象がない

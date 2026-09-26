@@ -42,6 +42,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   `tasks/<feature>` 等)を切って作業し、完了したら `gh pr create` で PR を作成する
 - `/speckit-implement` は `spec.md` のユーザーストーリー(P1, P2, ...)単位でブランチ・PR を
   分割する(1 ユーザーストーリー = 1 ブランチ = 1PR)
+- ただし小さな変更 (FR の追加・改訂が 1〜2 件、新しい画面やデータ構造の変更なし、1 ユーザー
+  ストーリー内で完結) は、specify から implement までを 1 ブランチ・1PR で進めてよい
+  - フェーズごとにコミットは分ける。小さな変更として扱うかは specify の時点で提案し、人間が決める
 - 実装済み機能のバグ修正は SpecKit のフェーズ外として扱い、GitHub Issue に現象・再現手順・
   原因を記録してから `fix/<短い名前>` ブランチで修正する
   - 修正作業自体は `bug` 拡張 (`.claude/skills/speckit-bug-*`、`specify extension add bug`

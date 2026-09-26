@@ -24,7 +24,9 @@ public partial class ClockWindow : Window
     private readonly Action _onDpiChanged;
     private readonly DispatcherTimer _timer;
     private bool _isDragging;
-    private Point _dragLastPointerPosition;
+
+    // ドラッグ開始時の、マウスの画面座標とウィンドウ左上の差 (物理ピクセル)
+    private (int X, int Y) _dragGrabOffset;
 
     public ClockWindow(
         WidgetSettings settings,
@@ -50,14 +52,21 @@ public partial class ClockWindow : Window
         SourceInitialized += (_, _) => ApplyPlacement();
         ContentRendered += (_, _) => ApplyPlacement();
 
-        // フォントサイズや日付/曜日表示の変更でサイズが変わっても、アンカーからの位置を保つ (SC-007)
-        SizeChanged += (_, _) => ApplyPlacement();
+        // フォントサイズや日付/曜日表示の変更でサイズが変わっても、アンカーからの位置を保つ (SC-007)。
+        // SizeToContent のウィンドウでは、SizeChanged の時点ではまだ Win32 側のウィンドウが変化前の
+        // サイズのままで、GetWindowRect も古いサイズを返す。そのまま配置すると右寄せ・下寄せで
+        // サイズの変化分だけずれるため、リサイズが終わってから配置し直す (issue #36)
+        SizeChanged += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, ApplyPlacement);
 
         // DPI スケールのみの変更 (WM_DISPLAYCHANGE は飛ばない) では、既定では WPF が Windows の
         // 提案する矩形へウィンドウを自動移動させてしまい、位置ロック中でも保存済み座標からずれる。
         // DpiChanged は WPF のその自動移動が完了した後に発火するため、ここで最新のモニタ情報へ
-        // 差し替えて保存済みの座標から配置し直すことでロック位置を維持する (issue #25)
-        DpiChanged += (_, _) => _onDpiChanged();
+        // 差し替えて保存済みの座標から配置し直すことでロック位置を維持する (issue #25)。
+        // ただし DpiChanged の中で同期的に処理してはいけない。モニタの取り外しで Windows がこの
+        // ウィンドウを別の DPI のモニタへ移すと、ここでモニタを列挙し直した結果このウィンドウ自身が
+        // 閉じられ、WPF が DPI の処理を続ける途中で破棄されて描画スレッドが異常終了する (issue #41)。
+        // WM_DPICHANGED の処理が終わってから実行する
+        DpiChanged += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, _onDpiChanged);
 
         ApplyAppearance();
         ApplyWindowBehavior();
@@ -84,6 +93,14 @@ public partial class ClockWindow : Window
     /// </summary>
     private void ApplyPlacement()
     {
+        // ドラッグ中にサイズが変わると (等幅でない数字のフォントで秒表示が ON のとき等)、SizeChanged から
+        // ドラッグ前の保存済みの位置やアンカーの位置へ引き戻されて揺れる。マウスを離した時点で今の位置を
+        // 保存するので、ドラッグ中は配置し直さない (SC-008)
+        if (_isDragging)
+        {
+            return;
+        }
+
         var bounds = WindowPositionHelper.TryGetBounds(this);
         var dpiScale = VisualTreeHelper.GetDpi(this).DpiScaleX;
         var (x, y) = WidgetPlacementCalculator.ToAbsolutePosition(
@@ -129,8 +146,9 @@ public partial class ClockWindow : Window
     }
 
     /// <summary>
-    /// このモニタのアンカー指定時の余白を変更する。自由配置中は値を保存するだけで、位置は
-    /// 変わらない (research.md #16)。位置ロック中は何もしない (FR-010)。
+    /// このモニタの余白を変更する。アンカー指定中は新しい余白で配置し直す。自由配置中は、
+    /// 縁までの距離がその余白以下の縁から余白ぶん内側へ動かし、自由配置のままにする。範囲内の縁が
+    /// なければ何もしない (FR-039、research.md #19)。位置ロック中は何もしない (FR-010)。
     /// </summary>
     public void SetAnchorMargin(AnchorMargin margin)
     {
@@ -139,9 +157,42 @@ public partial class ClockWindow : Window
             return;
         }
 
+        if (_placement.Anchor is null)
+        {
+            if (TryGetMarginTarget(margin) is not { } target)
+            {
+                return;
+            }
+
+            (_placement.X, _placement.Y) = WidgetPlacementCalculator.ToRelativePosition(_monitor, target.X, target.Y);
+        }
+
         _placement.AnchorMargin = margin;
         ApplyPlacement();
         SettingsRepository.Save(_settings);
+    }
+
+    /// <summary>
+    /// 右クリックメニューで、この余白の項目を選べるかどうかを返す。アンカー指定中は常に選べる。
+    /// 自由配置中は、選んだときに実際に動かせる (範囲内の縁がある) 場合だけ選べる。判定には
+    /// <see cref="SetAnchorMargin"/> と同じ計算を使い、メニューの表示と動きを食い違わせない (FR-039)。
+    /// 位置ロックは <see cref="PlacementMenuBuilder"/> 側で扱うので、ここでは見ない。
+    /// </summary>
+    public bool CanSelectAnchorMargin(AnchorMargin margin)
+        => _placement.Anchor is not null || TryGetMarginTarget(margin) is not null;
+
+    // 自由配置中に余白を選んだときの移動先 (絶対座標、物理ピクセル)。ウィンドウの位置が取れない
+    // 場合と、範囲内の縁がない場合は null
+    private (int X, int Y)? TryGetMarginTarget(AnchorMargin margin)
+    {
+        if (WindowPositionHelper.TryGetBounds(this) is not { } bounds)
+        {
+            return null;
+        }
+
+        var dpiScale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        return WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            _monitor, bounds.X, bounds.Y, bounds.Width, bounds.Height, margin, dpiScale);
     }
 
     private void BackgroundBorder_ContextMenuOpening(object sender, ContextMenuEventArgs e)
@@ -152,7 +203,8 @@ public partial class ClockWindow : Window
             _settings.WindowBehavior.PositionLocked,
             SetAnchorHorizontal,
             SetAnchorVertical,
-            SetAnchorMargin);
+            SetAnchorMargin,
+            CanSelectAnchorMargin);
     }
 
     public void ApplyWindowBehavior()
@@ -262,21 +314,38 @@ public partial class ClockWindow : Window
             return;
         }
 
+        if (WindowPositionHelper.TryGetCursorPosition() is not { } cursor
+            || WindowPositionHelper.TryGetBounds(this) is not { } bounds)
+        {
+            return;
+        }
+
+        _dragGrabOffset = (cursor.X - bounds.X, cursor.Y - bounds.Y);
         _isDragging = true;
-        _dragLastPointerPosition = e.GetPosition(this);
         BackgroundBorder.CaptureMouse();
     }
 
     private void BackgroundBorder_MouseMove(object sender, MouseEventArgs e)
     {
-        if (!_isDragging)
+        if (!_isDragging
+            || WindowPositionHelper.TryGetCursorPosition() is not { } cursor
+            || WindowPositionHelper.TryGetBounds(this) is not { } bounds)
         {
             return;
         }
 
-        var position = e.GetPosition(this);
-        Left += position.X - _dragLastPointerPosition.X;
-        Top += position.Y - _dragLastPointerPosition.Y;
+        // FR-009: ドラッグで動かせるのは、このモニタの作業領域内に限る。ウィンドウが境界をまたぐと
+        // DpiChanged が起き、後回しにした再配置 (issue #41) で保存済みの位置へ引き戻されて揺れる
+        // (issue #39)。作業領域内に留めれば、ウィンドウが別の DPI のモニタへ移ることはない。
+        // WPF の Left/Top は DIP で、作業領域 (物理ピクセル) と比べると拡大率の分だけずれるため、
+        // マウスの画面座標から物理ピクセルで位置を求める (issue #10、research.md #18)
+        var (x, y) = WidgetPlacementCalculator.ClampToWorkArea(
+            _monitor,
+            cursor.X - _dragGrabOffset.X,
+            cursor.Y - _dragGrabOffset.Y,
+            bounds.Width,
+            bounds.Height);
+        WindowPositionHelper.MoveTo(this, x, y);
     }
 
     private void BackgroundBorder_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)

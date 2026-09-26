@@ -689,6 +689,228 @@ T087 の実機確認で、9 つの配置を 1 列に並べたメニューは「�
 
 ---
 
+## Phase 16: ウィジェットのサイズが変わるとアンカー指定の位置がずれるバグの修正 (2026-09-25)
+
+**Purpose**: issue #36 の修正の記録。既存の成功基準 (SC-007) を満たせていなかった実装バグであり、
+仕様の追加・変更は伴わない。修正は `bug` 拡張のフローで行った (経緯・検証結果は
+`.specify/bugs/anchor-width-change/` を参照)
+
+- issue #36: 右上アンカーのウィジェットで、表示文字列の変化 (曜日の変化、秒表示の ON/OFF 等) により
+  幅が変わると、変化分だけ位置がずれる。`SizeToContent` のウィンドウでは、`SizeChanged` の時点では
+  Win32 側のウィンドウがまだ変化前のサイズで、`GetWindowRect` が古いサイズを返すため
+  - 位置ロック中にずれたことで見つかった
+
+- [X] T093 [US3] `src/OkidokeiWidget.App/ClockWindow.xaml.cs` の `SizeChanged` での再配置を、
+      `Dispatcher.BeginInvoke(DispatcherPriority.Loaded, ApplyPlacement)` 経由にして、
+      リサイズが終わってから配置し直す (issue #36)
+
+**Checkpoint**: `dotnet build`・`dotnet test` が成功し、右上アンカーのまま秒表示を ON/OFF しても
+右端の余白が変わらないこと (修正前に実機で再現し、修正後に解消したことを確認済み)
+
+---
+
+## Phase 17: 表示中のモニタとの HDMI 接続が切れるとアプリが落ちるバグの修正 (2026-09-26)
+
+**Purpose**: issue #41 の修正の記録。既存の Edge Case (稼働中のモニタ切断時は自動非表示、設定は
+保持) を満たせていなかった実装バグであり、仕様の追加・変更は伴わない。修正は `bug` 拡張のフローで
+行った (経緯・検証結果は `.specify/bugs/hdmi-disconnect-crash/` を参照)
+
+- issue #41: 拡大率の異なるモニタとの HDMI 接続が切れると、再接続時に `UCEERR_RENDERTHREADFAILURE`
+  で落ちる
+  - 取り外しで Windows がウィンドウを別の DPI のモニタへ移すと、`DpiChanged` が起きる
+  - その中で同期的にモニタを列挙し直すため、処理中のウィンドウ自身を閉じてしまい、描画スレッドが
+    異常終了していた
+  - 画面ロック中に TV (Android OS 搭載) 側で接続が切れて見つかった
+- 最初はソフトウェア描画への切り替えで直ると見たが、効果がなかった
+  - 診断用ビルドで呼び出し履歴を記録して原因を特定し直した
+
+- [X] T094 [US4] `src/OkidokeiWidget.App/ClockWindow.xaml.cs` の `DpiChanged` での
+      `onDpiChanged` の呼び出しを、`Dispatcher.BeginInvoke(DispatcherPriority.Loaded, ...)` 経由に
+      して、`WM_DPICHANGED` の処理が終わってから実行する (issue #41、T073 の修正)
+
+**Checkpoint**: `dotnet build`・`dotnet test` が成功し、次のことを実機で確認済み
+- TV の Android OS を再起動しても落ちず、再接続後に TV 側のウィジェットが元の位置に再表示される
+  (修正前に実機で再現し、修正後に解消したことを確認)
+- 位置ロック中に拡大率を変えても位置がずれない (issue #25 の回帰なし)
+
+---
+
+## Phase 18: ドラッグで動かせる範囲をモニタの作業領域内に限る (2026-09-26)
+
+**Purpose**: issue #39 を受けた FR-009 の改訂・SC-008 の新設と、FR-036 の明確化に対応する。
+すべて User Story 3「配置を自由に決め、誤操作から保護する」に属する。constitution v1.5.0 の
+小さな変更として、specify から implement までを 1 ブランチ (`feature/drag-within-monitor`)・
+1PR で進める。設計は plan.md の「既存実装に対する変更計画 (2026-09-26、issue #39)」と
+research.md #18 に従う
+
+- issue #39: 拡大率の異なるモニタの境界をドラッグでまたぐと落ちていた。PR #42 (issue #41) の後は
+  落ちないが、揺れてマウスを離すと元の位置へ戻る
+- ドラッグ中の位置を物理ピクセルで計算し、作業領域内に収めてから動かすことで、ウィンドウが別の
+  モニタへ出なくなり、`DpiChanged` による引き戻しが起きなくなる
+
+**Independent Test**: 位置ロックを OFF にしてウィジェットを隣のモニタやタスクバーの方へドラッグし
+続けると、作業領域の端で止まり、揺れず、マウスを離すと止まった位置に留まること
+
+### Core: 作業領域内へ収める計算
+
+- [X] T095 [US3] `src/OkidokeiWidget.Core/Monitors/WidgetPlacementCalculator.cs` に、絶対座標
+      (物理ピクセル) をモニタの作業領域内へ収める公開メソッド
+      `ClampToWorkArea(ConnectedMonitor monitor, int x, int y, int widgetWidth, int widgetHeight)` を
+      追加する。中身は `ToAbsolutePosition` の末尾にある `Clamp` 2 回分をそのまま移したもので、
+      ウィジェットが作業領域より大きい場合は左上を優先する既存の規則を保つ。`ToAbsolutePosition` は
+      サイズ未確定の 0 を最低 1 px にしてから、このメソッドを呼ぶ形にする (結果は変えない。
+      research.md #18)
+- [X] T096 [US3] `tests/OkidokeiWidget.Core.Tests/Monitors/WidgetPlacementCalculatorTests.cs` に
+      `ClampToWorkArea` のテストを追加する。作業領域の内側ならそのまま返す、左・右・上・下それぞれ
+      の外なら端に止まる、作業領域の原点が負 (プライマリの左や上にあるモニタ) でも正しく収める、
+      ウィジェットが作業領域より大きいときは左上に揃える、の各ケース。既存の `ToAbsolutePosition`
+      のテストがすべて通ることも確認する (T095 に依存)
+
+### App: ドラッグ
+
+- [X] T097 [P] [US3] `src/OkidokeiWidget.App/WindowPositionHelper.cs` に、マウスの画面座標を
+      物理ピクセルで返す `TryGetCursorPosition()` を追加する。`user32.dll` の `GetCursorPos` を
+      P/Invoke し、失敗した場合は `null` を返す。既存の `RECT` と同じく、`POINT` 構造体を
+      クラス内に private で定義する
+- [X] T098 [US3] `src/OkidokeiWidget.App/ClockWindow.xaml.cs` のドラッグ処理を、物理ピクセルで
+      計算する形に書き換える (T095・T097 に依存)
+      - フィールド `_dragLastPointerPosition` (`Point`、DIP) を、つかんだ位置 `_dragGrabOffset`
+        (`(int X, int Y)`、物理ピクセル) に置き換える
+      - `BackgroundBorder_PreviewMouseLeftButtonDown`: 位置ロック中は今までどおり何もしない。
+        `WindowPositionHelper.TryGetCursorPosition()` と `TryGetBounds(this)` の差を
+        `_dragGrabOffset` に入れてから `_isDragging = true` と `CaptureMouse()` を行う。どちらかが
+        取れない場合はドラッグを始めない
+      - `BackgroundBorder_MouseMove`: `Left`/`Top` は使わない。`マウスの画面座標 - _dragGrabOffset`
+        を `WidgetPlacementCalculator.ClampToWorkArea(_monitor, ...)` で作業領域内に収め、
+        `WindowPositionHelper.MoveTo` で動かす。ウィジェットのサイズは `TryGetBounds(this)` の
+        幅・高さを使う
+      - `ApplyPlacement`: ドラッグ中 (`_isDragging` が true) は何もせずに戻る。ドラッグ中に
+        ウィジェットのサイズが変わると (等幅でない数字のフォントで秒表示が ON のとき等)、
+        `SizeChanged` から保存済みの位置 (まだドラッグ前の位置) やアンカーの位置へ引き戻され、
+        揺れの原因になるため (SC-008、`/speckit-analyze` の指摘 C1)。マウスを離した時点で
+        今の位置が保存されるので、ドラッグ後に配置し直す必要はない
+      - `BackgroundBorder_MouseLeftButtonUp`: 変えない。位置が変わったかどうかに関係なく、
+        今の位置を保存して `Anchor` を null に戻す (FR-036、spec.md の Clarifications)
+      - コメントには、境界をまたがせないことで `DpiChanged` による引き戻しを避けている理由
+        (issue #39) と、DIP ではなく物理ピクセルで計算する理由 (issue #10) を残す
+
+### 確認
+
+- [X] T099 [US3] `dotnet build`・`dotnet test` が成功することを確認し、`quickstart.md` の
+      「US3: 配置とロック」→「ドラッグで動かせる範囲」の手動シナリオを人間に実施してもらう。
+      あわせて既存の「アンカー指定」のシナリオのうち、ドラッグに関わるもの (FR-036) と、位置ロック中は
+      ドラッグで動かないこと (SC-004) を確認する。結果を本 Phase の末尾に記録する (T095〜T098 に依存)
+
+**Checkpoint**: `dotnet test` が全件成功し、quickstart.md の「ドラッグで動かせる範囲」のシナリオが
+すべて期待どおりに動作する状態。issue #39 の再現手順で、落ちない・揺れない・元の位置へ戻らないこと
+
+### Phase 18 の確認結果 (2026-09-26)
+
+- `dotnet build` (Debug、警告 0、エラー 0)、`dotnet test` (78 件すべて合格。Phase 18 で 8 件を追加)
+- 人間が Debug 版を実機で起動し、quickstart.md の「ドラッグで動かせる範囲」のシナリオを確認した。
+  余白に関する 2 点を除き、問題なし
+  - 端で止まる・端に沿って動く・内側へ戻すと再び追従する
+  - 225% のモニタとの境界の手前で止まり、揺れず、落ちず、離した位置に留まる (issue #39 の解消)
+  - 再起動後の復元、位置ロック中はドラッグで動かないこと (SC-004)
+- 次の 2 点に違和感があったが、いずれも issue #26 で決めた仕様どおりの動き (research.md #16) で、
+  本 Phase の不具合ではない。FR-035・FR-036 の見直しとして issue #43 に切り出した
+  - ドラッグで自由配置になっても、「余白」のチェックが外れない
+  - 自由配置のまま端に付けて「余白」を選んでも、余白が入らない
+
+---
+
+## Phase 19: 自由配置のときも余白で縁から離せるようにする (2026-09-26)
+
+**Purpose**: issue #43 を受けた FR-035 の改訂と FR-039 の新設に対応する。すべて User Story 3
+「配置を自由に決め、誤操作から保護する」に属する。constitution v1.5.0 の小さな変更として、
+specify から implement までを 1 ブランチ (`feature/margin-in-free-placement`)・1PR で進める。
+設計は plan.md の「既存実装に対する変更計画 (2026-09-26、issue #43)」と research.md #19 に従う
+
+- 自由配置中は、余白のチェックを付けない (横位置・縦位置と同じ扱い)
+- 自由配置中に余白を選ぶと、縁までの距離がその余白以下の縁から、余白ぶん内側へ動かす。
+  動かした後も自由配置のまま。範囲内の縁がない余白はグレーアウトする
+
+**Independent Test**: 自由配置のウィジェットを右の縁に付けて「余白」→「狭め」を選ぶと、右の縁から
+少し内側へ動き、縦の位置は変わらず、チェックも付かないこと。画面の中ほどでは余白の項目が
+どちらもグレーアウトしていること
+
+### Core: 余白で縁から離した位置の計算
+
+- [X] T100 [US3] `src/OkidokeiWidget.Core/Monitors/WidgetPlacementCalculator.cs` に、自由配置中に
+      余白を選んだときの移動先を返す公開メソッド
+      `ApplyMarginToNearEdges(ConnectedMonitor monitor, int x, int y, int widgetWidth, int widgetHeight, AnchorMargin margin, double dpiScale)`
+      を追加する。戻り値は `(int X, int Y)?` (仮想デスクトップ上の絶対座標、物理ピクセル) (research.md #19)
+      - 余白の物理ピクセルは、`ToAnchoredPosition` と同じ `余白 (DIP) × 拡大率` の四捨五入で求める。
+        この換算は private メソッドに切り出し、`ToAnchoredPosition` からも使う (結果は変えない)
+      - 横方向: 左の縁までの距離 (`x - WorkAreaX`) が余白以下なら `WorkAreaX + 余白` にする。
+        そうでなく右の縁までの距離 (`WorkAreaX + WorkAreaWidth - (x + widgetWidth)`) が余白以下なら
+        `WorkAreaX + WorkAreaWidth - widgetWidth - 余白` にする。どちらでもなければ `x` のまま
+      - 縦方向も同じ (上、下の順)
+      - 横・縦のどちらも範囲内の縁がなければ null を返す。それ以外は `ClampToWorkArea` で収めて返す
+      - XML コメントに、メニューのグレーアウトの判定にも同じ結果を使うこと、向かい合う縁が両方とも
+        範囲内の場合は仕様で定めていないこと (issue #45) を書く
+- [X] T101 [US3] `tests/OkidokeiWidget.Core.Tests/Monitors/WidgetPlacementCalculatorTests.cs` に
+      `ApplyMarginToNearEdges` のテストを追加する (T100 に依存)
+      - 右の縁に接している (距離 0) → 右の縁から余白ぶん内側へ。縦の位置は変わらない
+      - 距離がちょうど余白と同じ → 位置は変わらず、null ではない
+      - 距離が余白 + 1 px → null
+      - 右下の隅に接している → 右と下の両方から余白ぶん離れる
+      - 左・上の縁でも同じように動く
+      - 拡大率 1.5 で、狭め = 12 px・広め = 36 px として判定・移動する
+      - 作業領域の原点が負 (プライマリの左や上にあるモニタ) でも正しく計算する
+
+### App: メニューと余白の選択
+
+- [X] T102 [P] [US3] `src/OkidokeiWidget.App/PlacementMenuBuilder.cs` を変更する
+      - `Build`・`Populate` に、余白の項目ごとに選べるかを返す `Func<AnchorMargin, bool> canSelectMargin`
+        を追加する。余白の項目の `IsEnabled` は `!isLocked && canSelectMargin(value)` にする。横位置・
+        縦位置の項目は今までどおり `!isLocked`
+      - 余白のチェックは、`placement.Anchor` が null (自由配置中) ならどちらにも付けない。アンカー
+        指定中は今までどおり `AnchorMargin` の側に付ける (FR-035)
+      - クラスと `Populate` の XML コメントを、上の 2 点に合わせて更新する
+- [X] T103 [US3] `src/OkidokeiWidget.App/ClockWindow.xaml.cs` を変更する (T100・T102 に依存)
+      - 余白が選べるかを返す `public bool CanSelectAnchorMargin(AnchorMargin margin)` を追加する。
+        アンカー指定中は true。自由配置中は `TryGetBounds(this)` と `VisualTreeHelper.GetDpi(this)` で
+        今の位置・サイズ・拡大率を取り、`ApplyMarginToNearEdges` が null でなければ true。位置が
+        取れなければ false (位置ロックは `PlacementMenuBuilder` 側で扱うので、ここでは見ない)
+      - `SetAnchorMargin`: 位置ロック中は今までどおり何もしない。アンカー指定中は今までどおり
+        `AnchorMargin` を更新して `ApplyPlacement` し、保存する。自由配置中は `ApplyMarginToNearEdges`
+        で移動先を求める。位置が取れない場合と、移動先が null の場合は何もしない。null でなければ
+        `AnchorMargin` を更新し、移動先を `ToRelativePosition` で `X`/`Y` に入れてから
+        `ApplyPlacement` し、保存する (`Anchor` は null のまま)
+      - `SetAnchorMargin` の XML コメントの「自由配置中は値を保存するだけで、位置は変わらない
+        (research.md #16)」を、今の動き (FR-039、research.md #19) に書き換える
+      - `BackgroundBorder_ContextMenuOpening` で `PlacementMenuBuilder.Populate` に
+        `CanSelectAnchorMargin` を渡す
+- [X] T104 [US3] `src/OkidokeiWidget.App/App.xaml.cs` のトレイのメニューで、各モニタの
+      `PlacementMenuBuilder.Build` に `window.CanSelectAnchorMargin` を渡す (T102・T103 に依存)
+
+### 確認
+
+- [X] T105 [US3] `dotnet build`・`dotnet test` が成功することを確認し、`quickstart.md` の
+      「US3: 配置とロック」→「自由配置のときの余白」の手動シナリオを人間に実施してもらう。
+      あわせて既存の「アンカー指定」のシナリオのうち、余白に関わるもの (アンカー指定中の余白の
+      切り替え、ドラッグ後のチェック) と、位置ロック中は余白もグレーアウトすること (FR-010) を
+      確認する。結果を本 Phase の末尾に記録する (T100〜T104 に依存)
+
+**Checkpoint**: `dotnet test` が全件成功し、quickstart.md の「自由配置のときの余白」のシナリオが
+すべて期待どおりに動作する状態。issue #43 の 2 つの違和感 (ドラッグ後もチェックが残る、端に
+付けて余白を選んでも動かない) が解消していること
+
+### Phase 19 の確認結果 (2026-09-26)
+
+- `dotnet build` (Debug、警告 0、エラー 0)、`dotnet test` (92 件すべて合格。Phase 19 で 14 件を追加)
+- 人間が Debug 版を実機で起動し、quickstart.md の「自由配置のときの余白」のシナリオを確認した。
+  すべて問題なし
+  - ドラッグ後は余白のチェックも外れる (issue #43 の 1 つ目の違和感の解消)
+  - 端に付けて余白を選ぶと縁から離れ、隅では両方の縁から離れる (issue #43 の 2 つ目の違和感の解消)
+  - 範囲内の縁がない余白のグレーアウト、本体とタスクトレイの表示の一致、次のアンカー指定での
+    余白の引き継ぎ、再起動後の復元
+- あわせて、アンカー指定中の余白の切り替えと、位置ロック中は余白もグレーアウトすること (FR-010) を
+  確認し、問題なし
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -710,6 +932,18 @@ T087 の実機確認で、9 つの配置を 1 列に並べたメニューは「�
   - T085 (`TrayIconManager`) は T077 以降いつでも着手できる。T086 (トレイのメニュー) は
     T084・T085 の後
   - T087 (確認) は最後
+- **Phase 18 (ドラッグ範囲の制限、issue #39)**: Phase 14 の `WidgetPlacementCalculator` と、
+  Phase 17 (issue #41) の `DpiChanged` の後回し処理の上に積む。Phase 内の順序は以下のとおり
+  - T095 (Core の計算) → T096 (テスト)
+  - T097 (`GetCursorPos`) は T095 と並行して着手できる
+  - T098 (ドラッグ処理) は T095・T097 の後
+  - T099 (確認) は最後
+- **Phase 19 (自由配置のときの余白、issue #43)**: Phase 18 の `ClampToWorkArea` の上に積む。
+  Phase 内の順序は以下のとおり
+  - T100 (Core の計算) → T101 (テスト)
+  - T102 (`PlacementMenuBuilder`) は T100 と並行して着手できる
+  - T103 (`ClockWindow`) は T100・T102 の後、T104 (トレイのメニュー) は T103 の後
+  - T105 (確認) は最後
 
 ### User Story Dependencies
 

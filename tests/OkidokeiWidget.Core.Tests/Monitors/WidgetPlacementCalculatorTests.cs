@@ -69,6 +69,49 @@ public class WidgetPlacementCalculatorTests
         Assert.Equal(0, y);
     }
 
+    [Fact]
+    public void ClampToWorkArea_作業領域の内側ならそのまま返す()
+    {
+        var (x, y) = WidgetPlacementCalculator.ClampToWorkArea(PrimaryMonitor, 500, 300, 400, 200);
+
+        Assert.Equal(500, x);
+        Assert.Equal(300, y);
+    }
+
+    // ドラッグで作業領域の外へ出ようとしても、端で止まる (FR-009、issue #39)
+    [Theory]
+    [InlineData(-50, 300, 0, 300)] // 左
+    [InlineData(1600, 300, 1520, 300)] // 右
+    [InlineData(500, -30, 500, 0)] // 上
+    [InlineData(500, 900, 500, 832)] // 下 (タスクバーの方向)
+    [InlineData(-50, 900, 0, 832)] // 左下の角
+    public void ClampToWorkArea_作業領域の外なら端に止める(int inputX, int inputY, int expectedX, int expectedY)
+    {
+        var (x, y) = WidgetPlacementCalculator.ClampToWorkArea(PrimaryMonitor, inputX, inputY, 400, 200);
+
+        Assert.Equal(expectedX, x);
+        Assert.Equal(expectedY, y);
+    }
+
+    [Fact]
+    public void ClampToWorkArea_原点が負のモニタでも右隣のモニタへはみ出さない()
+    {
+        // プライマリの左にあるモニタから、右の境界 (x = 0) を越えてドラッグしたケース
+        var (x, y) = WidgetPlacementCalculator.ClampToWorkArea(SecondaryMonitor, 100, -1200, 400, 200);
+
+        Assert.Equal(-400, x);
+        Assert.Equal(-1071, y);
+    }
+
+    [Fact]
+    public void ClampToWorkArea_作業領域より大きいウィジェットは左上に合わせる()
+    {
+        var (x, y) = WidgetPlacementCalculator.ClampToWorkArea(PrimaryMonitor, 100, 100, 4000, 3000);
+
+        Assert.Equal(0, x);
+        Assert.Equal(0, y);
+    }
+
     [Theory]
     [InlineData(AnchorPosition.TopLeft, 8, 8)]
     [InlineData(AnchorPosition.Top, 760, 8)]
@@ -195,6 +238,103 @@ public class WidgetPlacementCalculatorTests
         var composed = AnchorAxes.Compose(AnchorAxes.HorizontalOf(anchor), AnchorAxes.VerticalOf(anchor));
 
         Assert.Equal(anchor, composed);
+    }
+
+    [Fact]
+    public void ApplyMarginToNearEdges_右の縁に接していれば余白ぶん内側へ離し縦は動かさない()
+    {
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, 1520, 400, 400, 200, AnchorMargin.Narrow, dpiScale: 1.0);
+
+        Assert.Equal((1512, 400), result);
+    }
+
+    [Fact]
+    public void ApplyMarginToNearEdges_縁までの距離がちょうど余白と同じなら位置は変わらない()
+    {
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, 1512, 400, 400, 200, AnchorMargin.Narrow, dpiScale: 1.0);
+
+        Assert.Equal((1512, 400), result);
+    }
+
+    [Fact]
+    public void ApplyMarginToNearEdges_どの縁からも余白より離れていればnullを返す()
+    {
+        // 右の縁から 9 px (狭めの 8 px + 1 px)。他の縁からも十分に離れている
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, 1511, 400, 400, 200, AnchorMargin.Narrow, dpiScale: 1.0);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ApplyMarginToNearEdges_狭めより離れていても広めの範囲内なら広めでは動かせる()
+    {
+        // 右の縁から 16 px
+        var narrow = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, 1504, 400, 400, 200, AnchorMargin.Narrow, dpiScale: 1.0);
+        var wide = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, 1504, 400, 400, 200, AnchorMargin.Wide, dpiScale: 1.0);
+
+        Assert.Null(narrow);
+        Assert.Equal((1496, 400), wide);
+    }
+
+    [Fact]
+    public void ApplyMarginToNearEdges_右下の隅に接していれば右と下の両方から離す()
+    {
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, 1520, 832, 400, 200, AnchorMargin.Wide, dpiScale: 1.0);
+
+        Assert.Equal((1496, 808), result);
+    }
+
+    [Theory]
+    [InlineData(0, 0, 8, 8)]
+    [InlineData(3, 400, 8, 400)]
+    [InlineData(700, 5, 700, 8)]
+    public void ApplyMarginToNearEdges_左や上の縁でも余白ぶん内側へ離す(int x, int y, int expectedX, int expectedY)
+    {
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, x, y, 400, 200, AnchorMargin.Narrow, dpiScale: 1.0);
+
+        Assert.Equal((expectedX, expectedY), result);
+    }
+
+    [Theory]
+    [InlineData(1520, AnchorMargin.Narrow, 1508)]
+    [InlineData(1520, AnchorMargin.Wide, 1484)]
+    [InlineData(1508, AnchorMargin.Narrow, 1508)]
+    public void ApplyMarginToNearEdges_拡大率150パーセントでは余白を物理ピクセルに換算して判定する(
+        int x, AnchorMargin margin, int expectedX)
+    {
+        // 狭め = 12 px、広め = 36 px
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, x, 400, 400, 200, margin, dpiScale: 1.5);
+
+        Assert.Equal((expectedX, 400), result);
+    }
+
+    [Fact]
+    public void ApplyMarginToNearEdges_拡大率150パーセントで狭めより1ピクセル離れていればnullを返す()
+    {
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            PrimaryMonitor, 1507, 400, 400, 200, AnchorMargin.Narrow, dpiScale: 1.5);
+
+        Assert.Null(result);
+    }
+
+    [Theory]
+    [InlineData(-3840, -1071, AnchorMargin.Wide, -3816, -1047)]
+    [InlineData(-400, 781, AnchorMargin.Narrow, -408, 773)]
+    public void ApplyMarginToNearEdges_作業領域の原点が負のモニタでも縁から離す(
+        int x, int y, AnchorMargin margin, int expectedX, int expectedY)
+    {
+        var result = WidgetPlacementCalculator.ApplyMarginToNearEdges(
+            SecondaryMonitor, x, y, 400, 200, margin, dpiScale: 1.0);
+
+        Assert.Equal((expectedX, expectedY), result);
     }
 
     [Fact]

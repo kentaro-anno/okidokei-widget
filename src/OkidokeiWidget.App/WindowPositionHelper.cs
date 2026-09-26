@@ -26,6 +26,17 @@ internal static class WindowPositionHelper
         public int Bottom;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -61,5 +72,14 @@ internal static class WindowPositionHelper
         }
 
         return (rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+    }
+
+    /// <summary>
+    /// マウスの画面座標を物理ピクセルで返す。取得できない場合は <c>null</c>。
+    /// Per-Monitor V2 のプロセスでは <c>GetWindowRect</c> と同じ座標系になる (research.md #18)。
+    /// </summary>
+    public static (int X, int Y)? TryGetCursorPosition()
+    {
+        return GetCursorPos(out var point) ? (point.X, point.Y) : null;
     }
 }
